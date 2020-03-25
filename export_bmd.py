@@ -4,21 +4,24 @@ from mathutils import Color, Vector, Matrix
 from itertools import chain
 from .util import *
 
-def export_bone(bone, bones, materials):
+def export_bone(bone, bones, materials, mesh, meshes):
     """ Returns (bone_data, other_data, ptrs) where:
     bone_data: AlignedBytes is the bytestring of the bone
     name_data: [AlignedBytes] is a list of relevant detached bytestrings
     ptrs: [BytesPtr] is a list of relevant pointers
+    
+    If bone is None, the model is exported as rooms, so mesh and meshes must be provided.
     """
     bytestr = bytearray()
     aligned = AlignedBytes(bytestr, 4)
 
+    num_bones = len(bones) if bone else len(meshes)
     # Bone ID
-    bone_id = bones.index(bone) if bone else 0
+    bone_id = bones.index(bone) if bone else meshes.index(mesh)
     bytestr += from_uint(bone_id, 4)
     
     # Name
-    name_bytes = AlignedBytes(str_to_cstr(bone.name if bone else "root"), 1)
+    name_bytes = AlignedBytes(str_to_cstr(bone.name if bone else "r" + str(bone_id)), 1)
     bytestr += from_uint(0, 4)
     name_ptr = BytesPtr(aligned, 4, name_bytes, 0, 4)
 
@@ -27,7 +30,7 @@ def export_bone(bone, bones, materials):
     # Has children
     bytestr += from_uint(len(bone.children) > 0 if bone else 0, 2)
     # Next sibling
-    sibling_id = 0
+    sibling_id = 1 if bone_id < num_bones - 1 else 0
     if bone:
         later_siblings = [b for b in bones[bone_id + 1:] if b.parent == bone.parent]
         sibling_id = bones.index(later_siblings[0]) if later_siblings else 0
@@ -48,10 +51,14 @@ def export_bone(bone, bones, materials):
 
     # Materials and display lists
     # TODO: Calculate when a real bone is used
-    bytestr += from_uint(len(materials), 4)
+    indexes = None
+    if not bone:
+        start = sum(len(m.materials) for m in meshes[:bone_id])
+        indexes = list(range(start, start + len(materials)))
+    bytestr += from_uint(len(indexes), 4)
     bytestr += from_uint(0, 4) * 2 # placeholder pointers
 
-    ids = lambda: AlignedBytes(b''.join(from_uint(i, 1) for i in range(len(materials))), 2)
+    ids = lambda: AlignedBytes(from_uint_list(indexes, 1), 1)
     mat_ids = ids()
     dl_ids = ids()
     mat_ptr = BytesPtr(aligned, 0x34, mat_ids, 0, 4)
@@ -137,11 +144,13 @@ def add_primitive(dl_bytestr, primitive, p_type, transform_ids, \
     cmd_offset = add_command(dl_bytestr, 0x41, b'', cmd_offset)
     return cmd_offset, prev_vertex
 
-def export_display_list(mesh, material, bones, scale_factor):
+def export_display_list(mesh, material, bones, meshes, scale_factor):
     """ Returns (bone_data, other_data, ptrs) where:
     bone_data: AlignedBytes is the bytestring of the bone
     name_data: [AlignedBytes] is a list of relevant detached bytestrings
     ptrs: [BytesPtr] is a list of relevant pointers
+
+    Either bones or meshes must be provided.
     """
     bytestr = bytearray()
     aligned = AlignedBytes(bytestr, 4)
@@ -181,7 +190,7 @@ def export_display_list(mesh, material, bones, scale_factor):
             counter += len(face.vertices)
             
     # Transform ID list
-    transform_ids = [v.group for v in vertices]
+    transform_ids = list({v.group for v in vertices})
     header_bytestr += from_uint(len(transform_ids), 4)
     header_bytestr += from_uint(0, 4) # pointer
     transform_bytestr = AlignedBytes(from_uint_list(transform_ids, 1), 1)
@@ -236,7 +245,8 @@ def export_texture(texture):
     tex_bytestr += from_uint(0, 4)
     tex_data = AlignedBytes(tex.tex_bytestr, 4)
     tex_ptr = BytesPtr(tex_aligned, 4, tex_data, 0, 4)
-    tex_bytestr += from_uint(len(tex.tex_bytestr), 4)
+    tex_bytestr += from_uint(len(tex.tex_bytestr) * 2 // 3 if \
+            tex.type == Texture.COMPRESSED else len(tex.tex_bytestr), 4)
 
     # Size
     for i in range(2):
@@ -261,7 +271,7 @@ def export_texture(texture):
     pal_bytestr += from_uint(0, 4)
     pal_data = AlignedBytes(tex.pal_bytestr, 4)
     pal_ptr = BytesPtr(pal_aligned, 4, pal_data, 0, 4)
-    pal_bytestr += from_uint(len(tex.pal_bytestr), 4)
+    pal_bytestr += from_uint((len(tex.pal_bytestr) + 3) // 4 * 4, 4)
     pal_bytestr += from_int(-1, 4)
 
     return (tex_aligned, tex_name_bytes, tex_data, [tex_name_ptr, tex_ptr],
@@ -350,22 +360,26 @@ def export_material(material, ref_textures):
 
 
 def save(context, filepath):
-    obj = context.active_object
+    meshes = sorted((obj.data for obj in context.selected_objects if obj.type == "MESH"),
+            key=lambda mesh: mesh.name)
+    rigs = [obj.data for obj in context.selected_objects if obj.type == "ARMATURE"]
 
     bytestr_list = BytesWithPtrs()
 
-    max_coord = max(max(abs(c) for c in v.co) for v in obj.data.vertices)
+    max_coord = max(max(max(abs(c) for c in v.co) for v in m.vertices) \
+            for m in meshes)
     scale_factor = max(int(math.log2(max_coord)) - 2, 0)
     # Values really close to 8 can still round to 8, so account for that
     max_coord = int_round_mid_up(max_coord / 2 ** scale_factor)
     if max_coord >= 8:
         scale_factor += 1
 
-    bone_data = [export_bone(None, [], obj.data.materials)]
+    bone_data = [export_bone(None, [], m.materials, m, meshes) for m in meshes]
     textures = []
-    displist_data = [export_display_list(obj.data, mat, [], scale_factor) \
-            for mat in obj.data.materials]
-    material_data = [export_material(mat, textures) for mat in obj.data.materials]
+    displist_data = [export_display_list(m, mat, [], meshes, scale_factor) \
+            for m in meshes for mat in m.materials]
+    material_data = [export_material(mat, textures) \
+            for m in meshes for mat in m.materials]
     texture_data = [export_texture(tex) for tex in textures]
 
     header = bytearray()

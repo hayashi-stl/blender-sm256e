@@ -1,5 +1,6 @@
 from mathutils import Color, Vector
 from functools import reduce
+from itertools import permutations, takewhile, chain
 
 def int_round_mid_up(num):
     return int((num + 0.5) // 1)
@@ -221,6 +222,142 @@ class Geometry:
 
         return (tri_strips, quad_strips, tris, quads)
 
+class Texel4x4:
+    def __init__(self, colors):
+        """
+        colors: {color} RGBA5551
+        """
+        self.colors, self.palette = Texture.reduce_colors(\
+                [c if c[3] != 0 else (0, 0, 0, 0) for c in colors], 4)
+        self.transparency = any(c[3] == 0 for c in self.colors)
+        self.palette_set = {c for c in self.palette if c[3] != 0}
+        self.interp = False
+
+        for perm in permutations(self.palette_set):
+            if len(perm) == 3 and \
+                    all(c2 == (c0 + c1) // 2 for c0, c1, c2 in zip(*perm)):
+                self.palette_set = {perm[0], perm[1]}
+                self.interp = True
+                self.transparency = True # consequence of midpoint interpolation
+
+            if len(perm) == 4 and \
+                    all(c2 == (c0 * 5 + c1 * 3) // 8 and \
+                        c3 == (c0 * 3 + c1 * 5) // 8 for c0, c1, c2, c3 in zip(*perm)):
+                self.palette_set = {perm[0], perm[1]}
+                self.interp = True
+                assert(not self.transparency)
+
+        self.cmap = (self.palette_set, 
+                set(range(2 if len(self.palette_set) < 2 or self.interp else \
+                    3 if self.transparency else 4)))
+
+        # Order: most constrained to least constrained
+        self.cmap_order = 0 if len(self.palette_set) == 4 else \
+                1 if len(self.palette_set) == 3 and self.transparency else \
+                2 if len(self.palette_set) == 3 else \
+                3 if len(self.palette_set) == 2 and self.interp else \
+                4 if len(self.palette_set) == 2 and self.transparency else \
+                5 if len(self.palette_set) == 2 else \
+                6 if len(self.palette_set) == 1 else \
+                7
+
+    def add_to_color_map(self, cmap_arr):
+        self.index = Texel4x4.add_color_map(cmap_arr, self.cmap)
+    
+    def get_bytestrs(self, palette):
+        """ Returns (tex_bytestr, pal_index_bytestr) """
+        self.palette = palette[self.index : self.index + 4]
+        self.palette += [None for _ in range(len(self.palette), 4)]
+        
+        if self.transparency:
+            self.palette[3] = (0, 0, 0, 0)
+
+        if self.interp:
+            if self.transparency:
+                self.palette[2] = tuple((c0 + c1) // 2 for c0, c1 in zip(*self.palette[0:2]))
+            else:
+                self.palette[2] = tuple((c0 * 5 + c1 * 3) // 8 for c0, c1 in \
+                        zip(*self.palette[0:2]))
+                self.palette[3] = tuple((c0 * 3 + c1 * 5) // 8 for c0, c1 in \
+                        zip(*self.palette[0:2]))
+
+        indexes = Texture.get_indexes(self.colors, self.palette)
+        tex_bytestr = from_uint(sum(idx << (2 * i) for i, idx in enumerate(indexes)), 4)
+
+        pal_index = self.index // 2 | \
+                self.interp << 14 | \
+                (not self.transparency) << 15
+        pal_index_bytestr = from_uint(pal_index, 2)
+        return tex_bytestr, pal_index_bytestr
+
+    def get_color_map_partition(cmap_arr, begin, end):
+        """ Returns [({color}, {int}, {int})] """
+        partition = []
+        while begin < end:
+            cmap = cmap_arr[begin]
+            partition.append((*cmap, {n for n in cmap[1] if begin <= n < end}))
+            begin = 1 + max(partition[-1][2])
+        return partition
+
+    def try_add_color_map_at(cmap_arr, new_cmap, i):
+        partition = Texel4x4.get_color_map_partition(cmap_arr,
+                i + min(new_cmap[1]), i + max(new_cmap[1]) + 1)
+
+        for perm in permutations(list(new_cmap[0]) + \
+                [None] * (len(new_cmap[1]) - len(new_cmap[0]))):
+            # Partition the permutation
+            part_perm = []
+            part_start = 0
+            for _, _, p in partition:
+                part_perm.append(set(perm[part_start : part_start + len(p)]) - \
+                        {None})
+                part_start += len(p)
+
+            # Attempt to add the permutation
+            if all(len(new_cols - cols) <= len(idxs) - len(cols) \
+                    for (cols, idxs, _), new_cols in zip(partition, part_perm)):
+                # Add the permutation, taking advantage of aliasing
+                for (cols, idxs, s_idxs), new_cols in zip(partition, part_perm):
+                    idxs -= s_idxs
+                    cols -= new_cols
+                    # Oops, may have too many colors left over
+                    dragged = set(list(cols)[:max(0, len(cols) - len(idxs))])
+                    cols -= dragged
+                    new_cols_ = new_cols | dragged
+
+                    for idx in s_idxs:
+                        cmap_arr[idx] = (new_cols_, s_idxs)
+
+                return True
+
+    def add_color_map(cmap_arr, new_cmap):
+        """
+        cmap_arr: [({color}, {int})] is an array of mappings from colors to indexes.
+            The indexes are the same as the indexes of the array.
+        new_cmap: ({color}, {int}) is the new mapping from colors to indexes to add.
+            These indexes are relative to some multiple-of-2 index in the color map array.
+        Color maps are allowed to have more indexes than colors to signify that an
+            open slot exists. Also, indexes are assumed to be consecutive.
+        """
+        for i in range(0, len(cmap_arr), 2):
+            if Texel4x4.try_add_color_map_at(cmap_arr, new_cmap, i):
+                return i
+
+    def convert_to_palette(cmap_arr):
+        palette = []
+
+        for i in range(len(cmap_arr)): # List will be modified and iterated over at the same time
+            cols, idxs = cmap_arr[i]
+            if cols:
+                palette.append(next(iter(cols)))
+                Texel4x4.try_add_color_map_at(cmap_arr, ({palette[-1]}, {0}), i)
+            else:
+                palette.append(None)
+
+        num_nones = len(list(takewhile(lambda c: c is None, reversed(palette))))
+        palette = [(0, 0, 0, 31) if c is None else c for c in palette[:-num_nones]]
+        return palette
+
 class Texture:
     A3I5 = 1
     COLOR_4 = 2
@@ -263,25 +400,23 @@ class Texture:
 
     def reduce_colors(colors, new_num):
         reduced = set(colors)
-        reduction = {}
+        new_colors = colors[:]
 
         while len(reduced) > new_num:
             pair = sorted(((c0, c1) for c0 in reduced for c1 in reduced if c0 != c1),
-                    key=lambda cp: sum((a - b) ** 2 for a, b in zip(*cp)))[0]
-            new_color = tuple((a + b) // 2 for a, b in zip(*pair))
+                    # Don't merge a transparent pixel with an opaque one regardless of distance
+                    key=lambda cp: (len(cp[0]) == 4 and (cp[0][3] == 0) != (cp[1][3] == 0),
+                        sum((a - b) ** 2 for a, b in zip(*cp))))[0]
+            # Keep more common color
+            new_color = max(pair, key=lambda c: colors.count(c))
 
             for i in range(2):
                 reduced.remove(pair[i])
             reduced.add(new_color)
 
-            for i in range(2):
-                if pair[i] != new_color:
-                    reduction[pair[i]] = new_color
-
-        new_colors = colors[:]
-        for i in range(len(new_colors)):
-            while new_colors[i] in reduction:
-                new_colors[i] = reduction[new_colors[i]]
+            for i in range(len(new_colors)):
+                if new_colors[i] in pair:
+                    new_colors[i] = new_color
                 
         return new_colors, list(reduced)
 
@@ -320,8 +455,30 @@ class Texture:
         self.pal_bytestr = b''
 
     def calc_bytestr_compressed(self):
-        # TODO
-        pass
+        qwidth = self.width // 4
+        qheight = self.height // 4
+        texels = [Texel4x4(chain.from_iterable(
+            self.rgba5555[self.width * (4 * (i // qwidth) + j) + 4 * (i % qwidth) :
+                          self.width * (4 * (i // qwidth) + j) + 4 * (i % qwidth + 1)] 
+            for j in range(4))) for i in range(qwidth * qheight)]
+
+        init_colors = set()
+        init_indexes = set(range(4 * len(texels)))
+        cmap_arr = [(init_colors, init_indexes) for _ in range(4 * len(texels))]
+        for texel in sorted(texels, key=lambda t: t.cmap_order):
+            texel.add_to_color_map(cmap_arr)
+
+        palette = Texel4x4.convert_to_palette(cmap_arr)
+        tex_bytestr = bytearray()
+        pal_index_bytestr = bytearray()
+
+        for texel in texels:
+            t, p = texel.get_bytestrs(palette)
+            tex_bytestr += t
+            pal_index_bytestr += p
+
+        self.tex_bytestr = tex_bytestr + pal_index_bytestr
+        self.pal_bytestr = from_uint_list([rgb555_to_uint16(c[0:3]) for c in palette], 2)
 
     def calc_bytestr(self):
         self.calc_type()
@@ -347,6 +504,8 @@ class Texture:
         if any(s != 2 ** (s.bit_length() - 1) or s < 8 or s > 1024 for s in texture.image.size):
             raise Exception("Texture dimensions must be powers of 2 between 8 and 1024.")
 
+        tex.width = texture.image.size[0]
+        tex.height = texture.image.size[1]
         tex.calc_bytestr()
         return tex
 
