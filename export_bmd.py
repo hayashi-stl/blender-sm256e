@@ -60,6 +60,9 @@ def export_bone(bone, bones, materials, mesh, meshes, group_names):
     else:
         start = sum(len(m.materials) for m in meshes[:bone_id])
         indexes = list(range(start, start + len(materials)))
+    if len(indexes) > 32:
+        print("You can have at most 32 bones. (This is probably not the limit, " +
+                "but exporting more than 32 bones is tricky and not supported right now.)")
     bytestr += from_uint(len(indexes), 4)
     bytestr += from_uint(0, 4) * 2 # placeholder pointers
 
@@ -380,6 +383,10 @@ def save(context, filepath):
     rigs = [obj.data for obj in context.selected_objects if obj.type == "ARMATURE"]
     bones = rigs[0].bones if rigs else []
 
+    if (bones and (len(meshes) != 1 or len(rigs) != 1)) or \
+            (not bones and len(meshes) > 8):
+        raise Exception("Select either exactly 1 mesh and 1 armature or up to 8 meshes.")
+
     bytestr_list = BytesWithPtrs()
 
     max_coord = max(max(max(abs(c) for c in \
@@ -392,6 +399,9 @@ def save(context, filepath):
     max_coord = int_round_mid_up(max_coord / 2 ** scale_factor)
     if max_coord >= 8:
         scale_factor += 1
+
+    if scale_factor > 13: # What's the actual limit?
+        raise Exception("Your model is way too big.")
 
     bone_data = [export_bone(b, bones, m.materials, m, meshes, get_group_names(m)) \
             for m in meshes for b in (bones if bones else [None])]
