@@ -4,7 +4,7 @@ from mathutils import Color, Vector, Matrix
 from itertools import chain
 from .util import *
 
-def export_bone(bone, bones, materials, mesh, meshes):
+def export_bone(bone, bones, materials, mesh, meshes, group_names):
     """ Returns (bone_data, other_data, ptrs) where:
     bone_data: AlignedBytes is the bytestring of the bone
     name_data: [AlignedBytes] is a list of relevant detached bytestrings
@@ -17,7 +17,7 @@ def export_bone(bone, bones, materials, mesh, meshes):
 
     num_bones = len(bones) if bone else len(meshes)
     # Bone ID
-    bone_id = bones.index(bone) if bone else meshes.index(mesh)
+    bone_id = bones.find(bone.name) if bone else meshes.index(mesh)
     bytestr += from_uint(bone_id, 4)
     
     # Name
@@ -26,14 +26,15 @@ def export_bone(bone, bones, materials, mesh, meshes):
     name_ptr = BytesPtr(aligned, 4, name_bytes, 0, 4)
 
     # Offset to parent
-    bytestr += from_int(bones.index(bone.parent) - bone_id if bone else 0, 2)
+    bytestr += from_int(bones.find(bone.parent.name) - bone_id \
+            if bone and bone.parent else 0, 2)
     # Has children
     bytestr += from_uint(len(bone.children) > 0 if bone else 0, 2)
     # Next sibling
     sibling_id = 1 if bone_id < num_bones - 1 else 0
     if bone:
         later_siblings = [b for b in bones[bone_id + 1:] if b.parent == bone.parent]
-        sibling_id = bones.index(later_siblings[0]) if later_siblings else 0
+        sibling_id = bones.find(later_siblings[0].name) if later_siblings else 0
     bytestr += from_int(sibling_id, 2)
     bytestr += from_uint(0, 2) # padding
     
@@ -50,9 +51,13 @@ def export_bone(bone, bones, materials, mesh, meshes):
     bytestr += from_vec(transform.to_translation(), 4, 12)
 
     # Materials and display lists
-    # TODO: Calculate when a real bone is used
     indexes = None
-    if not bone:
+    if bone:
+        # verts = {i for i,v in enumerate(mesh.vertices) if 
+        #         group_names[v.groups[0].group if v.groups else 0] == bone.name}
+        # indexes = {p.material_index for p in mesh.polygons if set(p.vertices) & verts}
+        indexes = list(range(len(materials))) if bone_id == 0 else []
+    else:
         start = sum(len(m.materials) for m in meshes[:bone_id])
         indexes = list(range(start, start + len(materials)))
     bytestr += from_uint(len(indexes), 4)
@@ -144,13 +149,11 @@ def add_primitive(dl_bytestr, primitive, p_type, transform_ids, \
     cmd_offset = add_command(dl_bytestr, 0x41, b'', cmd_offset)
     return cmd_offset, prev_vertex
 
-def export_display_list(mesh, material, bones, meshes, scale_factor):
+def export_display_list(mesh, material, bones, group_names, scale_factor):
     """ Returns (bone_data, other_data, ptrs) where:
     bone_data: AlignedBytes is the bytestring of the bone
     name_data: [AlignedBytes] is a list of relevant detached bytestrings
     ptrs: [BytesPtr] is a list of relevant pointers
-
-    Either bones or meshes must be provided.
     """
     bytestr = bytearray()
     aligned = AlignedBytes(bytestr, 4)
@@ -162,7 +165,6 @@ def export_display_list(mesh, material, bones, meshes, scale_factor):
     header_ptr = BytesPtr(aligned, 4, header_aligned, 0, 4)
 
     # Compile the geometry info
-    # TODO: Calculate vertex group properly
     if any(len(face.vertices) > 4 for face in mesh.polygons):
         raise Exception("A face has too many (more than 4) vertices. " + \
                 "All faces should be triangles or quadrilaterals.")
@@ -174,15 +176,25 @@ def export_display_list(mesh, material, bones, meshes, scale_factor):
         if material == mesh.materials[face.material_index]:
             for vertex_index in face.vertices:
                 vertex = mesh.vertices[vertex_index]
-                vertices.append(Vertex(vertex.co / 2 ** scale_factor, \
-                        None if material.use_vertex_color_paint else \
-                            vertex.normal if face.use_smooth else face.normal,
+                
+                normal = None if material.use_vertex_color_paint else \
+                        vertex.normal if face.use_smooth else face.normal
+                if normal and bones and len(vertex.groups) > 0:
+                    normal = bones[group_names[vertex.groups[0].group \
+                            ]].matrix_local.inverted().to_quaternion() * normal
+                    
+                vertices.append(Vertex(
+                            (bones[group_names[vertex.groups[0].group]].matrix_local.inverted() \
+                                    * vertex.co if bones and len(vertex.groups) > 0 else \
+                            vertex.co) / 2 ** scale_factor, \
+                        normal,
                         mesh.uv_layers[0].data[counter].uv \
                                 if material.texture_slots[0] and mesh.uv_layers else None,
                         mesh.vertex_colors[0].data[counter].color \
                                 if material.use_vertex_color_paint and mesh.vertex_colors \
                                 else None,
-                        0))
+                        bones.find(group_names[vertex.groups[0].group]) \
+                                if bones and len(vertex.groups) > 0 else 0))
                 counter += 1
             faces.append(Face(vertices[-len(face.vertices):]))
 
@@ -358,15 +370,22 @@ def export_material(material, ref_textures):
 
     return aligned, name_bytes, name_ptr
 
+def get_group_names(mesh):
+    return [g.name for g in [obj.vertex_groups for obj in bpy.data.objects \
+            if obj.data == mesh][0]]
 
 def save(context, filepath):
     meshes = sorted((obj.data for obj in context.selected_objects if obj.type == "MESH"),
             key=lambda mesh: mesh.name)
     rigs = [obj.data for obj in context.selected_objects if obj.type == "ARMATURE"]
+    bones = rigs[0].bones if rigs else []
 
     bytestr_list = BytesWithPtrs()
 
-    max_coord = max(max(max(abs(c) for c in v.co) for v in m.vertices) \
+    max_coord = max(max(max(abs(c) for c in \
+                (bones[get_group_names(m)[v.groups[0].group]].matrix_local.inverted() * v.co \
+                    if bones and len(v.groups) > 0 else v.co)) \
+            for v in m.vertices) \
             for m in meshes)
     scale_factor = max(int(math.log2(max_coord)) - 2, 0)
     # Values really close to 8 can still round to 8, so account for that
@@ -374,9 +393,10 @@ def save(context, filepath):
     if max_coord >= 8:
         scale_factor += 1
 
-    bone_data = [export_bone(None, [], m.materials, m, meshes) for m in meshes]
+    bone_data = [export_bone(b, bones, m.materials, m, meshes, get_group_names(m)) \
+            for m in meshes for b in (bones if bones else [None])]
     textures = []
-    displist_data = [export_display_list(m, mat, [], meshes, scale_factor) \
+    displist_data = [export_display_list(m, mat, bones, get_group_names(m), scale_factor) 
             for m in meshes for mat in m.materials]
     material_data = [export_material(mat, textures) \
             for m in meshes for mat in m.materials]
