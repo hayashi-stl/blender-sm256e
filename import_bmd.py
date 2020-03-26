@@ -142,7 +142,7 @@ def import_display_list(bytestr, displist_bytes, skeleton, material_id):
                 offset += 4
 
             elif cmd == 0x20: # Color
-                color = uint16_to_color(to_uint(data_bytes, offset, 2))
+                color = uint16_to_color(to_uint(data_bytes, offset, 2), 1)
                 offset += 4
 
             elif cmd == 0x21: # Normal
@@ -201,12 +201,123 @@ def import_display_lists(bytestr, skeleton, displist_material_map):
     faces = []
 
     for i in range(to_uint(bytestr, 0xc, 4)):
-        v, f = import_display_list(bytestr, get_n_bytes(bytestr, displist_offset + i * 8, 8),
-                skeleton, displist_material_map[i])
-        vertices += v
-        faces += f
+        if i in displist_material_map:
+            v, f = import_display_list(bytestr, 
+                    get_n_bytes(bytestr, displist_offset + i * 8, 8),
+                    skeleton, displist_material_map[i])
+            vertices += v
+            faces += f
 
     return Geometry(vertices, faces, False)
+
+def import_texture(bytestr, texture_id, palette_id, material):
+    if texture_id < 0:
+        return
+
+    tex_bytes = get_n_bytes(bytestr, to_uint(bytestr, 0x18, 4) + 0x14 * texture_id, 0x14)
+    pal_bytes = get_n_bytes(bytestr, to_uint(bytestr, 0x20, 4) + 0x10 * palette_id, 0x10) \
+            if palette_id >= 0 else None
+
+    name = cstr_to_str(bytestr, to_uint(tex_bytes, 0, 4))
+    size = to_uint(tex_bytes, 0x8, 4)
+    width = to_uint(tex_bytes, 0xc, 2)
+    height = to_uint(tex_bytes, 0xe, 2)
+
+    tex_param = to_uint(tex_bytes, 0x10, 4)
+    type_ = tex_param >> 26 & 7
+    transparency = tex_param >> 29 & 1
+    if type_ == Texture.COMPRESSED:
+        size = size * 3 // 2
+
+    tex_data = get_n_bytes(bytestr, to_uint(tex_bytes, 4, 4), size)
+    pal_data = get_n_bytes(bytestr, to_uint(pal_bytes, 4, 4), to_uint(pal_bytes, 8, 4)) \
+            if palette_id >= 0 else None
+
+    tex = Texture.from_bytestr(tex_data, pal_data, name, width, height, type_, transparency)
+    slot = material.texture_slots.add()
+    slot.texture = tex.texture
+    return tex.texture
+
+
+def import_material(bytestr, material_bytes, material_id, mesh, geo):
+    material = bpy.data.materials.new(cstr_to_str(bytestr, to_uint(material_bytes, 0, 4)))
+    mesh.materials.append(material)
+    tex = import_texture(bytestr, to_int(material_bytes, 4, 4), to_int(material_bytes, 8, 4),
+            material)
+
+    transparency = any(i % 4 == 3 and v < 1 for i, v in enumerate(tex.image.pixels)) \
+            if tex else False
+
+    # Texture parameters
+    if tex:
+        tex_param = to_uint(material_bytes, 0x20, 4)
+        if (tex_param >> 16 & 3) == 0:
+            tex.extension = "EXTEND"
+        if tex_param >> 18 & 1:
+            tex.use_mirror_x = True
+        if tex_param >> 19 & 1:
+            tex.use_mirror_y = True
+
+        if (tex_param >> 30 & 3) == 2:
+            material["Environment Map"] = 1
+
+    # Polygon parameters
+    poly_param = to_uint(material_bytes, 0x24, 4)
+    blend_type = poly_param >> 4 & 3
+    if tex:
+        material.texture_slots[0].blend_type = "MIX" if blend_type == 1 else "MULTIPLY"
+    material.game_settings.use_backface_culling = not (poly_param >> 6 & 1)
+    if poly_param >> 14 & 1:
+        material["Depth Equal"] = 1
+
+    alpha = poly_param >> 16 & 0x1f
+    if (transparency and blend_type != 1) or alpha != 31:
+        if tex:
+            material.texture_slots[0].use_map_alpha = True
+        material.use_transparency = True
+        material.alpha = alpha / 31
+
+    material["Polygon ID"] = poly_param >> 24 & 0x3f
+
+    # Lighting colors
+    diff_amb = to_uint(material_bytes, 0x28, 4)
+    diffuse = uint16_to_color(diff_amb, 2.2)
+    ambient = sum(uint16_to_color(diff_amb >> 16, 1)) / sum(diffuse) \
+            if sum(diffuse) > 0 else 0.5
+    material.diffuse_color = diffuse
+    material.diffuse_intensity = 1
+    material.ambient = ambient
+    material.use_vertex_color_paint = all(v.normal is None
+            for f in geo.faces for v in f.vertices if f.material_id == material_id)
+    
+    spec_emit = to_uint(material_bytes, 0x2c, 4)
+    specular = uint16_to_color(spec_emit, 2.2)
+    emission = sum(uint16_to_color(spec_emit >> 16, 1)) / 3
+    material.specular_color = specular
+    material.specular_intensity = 1
+    material.emit = emission
+
+
+def import_materials(bytestr, mesh, geo):
+    material_offset = to_uint(bytestr, 0x28, 4)
+
+    for i in range(to_uint(bytestr, 0x24, 4)):
+        import_material(bytestr, get_n_bytes(bytestr, material_offset + i * 0x30, 0x30),
+                i, mesh, geo)
+
+    counter = 0
+    for face, poly in zip(geo.faces, mesh.polygons):
+        poly.material_index = face.material_id
+
+        # UV downscaling
+        material = mesh.materials[face.material_id]
+        if material.texture_slots[0]:
+            size = material.texture_slots[0].texture.image.size
+            for i in range(counter, counter + len(face.vertices)):
+                for j in range(2):
+                    mesh.uv_layers[0].data[i].uv[j] /= size[j]
+
+        counter += len(face.vertices)
 
 
 def load(context, filepath):
@@ -218,5 +329,6 @@ def load(context, filepath):
     skeleton, displist_material_map = import_bones(bytestr)
     geo = import_display_lists(bytestr, skeleton, displist_material_map)
     mesh = geo.create_mesh(context, PurePath(filepath).stem, skeleton, scale)
+    import_materials(bytestr, mesh, geo)
 
     return {"FINISHED"}

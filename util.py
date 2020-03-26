@@ -262,6 +262,24 @@ class Geometry:
         for face in mesh.polygons:
             face.use_smooth = True
 
+        # UV
+        if any(v.uv for v in self.vertices):
+            mesh.uv_textures.new("UVMap")
+            uvs = [v.uv if v.uv else Vector((0, 0)) 
+                    for f in self.faces for v in f.vertices]
+
+            for i, data in enumerate(mesh.uv_layers[0].data):
+                data.uv = uvs[i]
+
+        # Vertex colors
+        if any(v.color for v in self.vertices):
+            mesh.vertex_colors.new("Col")
+            colors = [v.color if v.color else Color((1, 1, 1))
+                    for f in self.faces for v in f.vertices]
+
+            for i, data in enumerate(mesh.vertex_colors[0].data):
+                data.color = colors[i]
+
         return mesh
 
 
@@ -578,6 +596,111 @@ class Texture:
         tex.height = texture.image.size[1]
         tex.calc_bytestr()
         return tex
+
+    def get_colors(indexes, palette):
+        return [palette[index] for index in indexes]
+
+    def calc_rgba5555_alpha(self, num_alpha_bits):
+        self.rgba5555 = [self.palette[v % 2 ** (8 - num_alpha_bits)][0:3] +
+                [int_round_mid_up((v >> (8 - num_alpha_bits)) * 31 / (2 ** num_alpha_bits - 1))]
+                for v in to_uint_list(self.tex_bytestr, 0, 1, self.width * self.height)]
+
+    def calc_rgba5555_ncol(self, index_bits):
+        if self.transparency:
+            self.palette[0] = [0, 0, 0, 0]
+
+        indexes = [(v >> index_bits * i) % 2 ** index_bits
+                for v in to_uint_list(self.tex_bytestr, 0, 1, 
+                    self.width * self.height // (8 // index_bits))
+                for i in range(8 // index_bits)]
+        self.rgba5555 = Texture.get_colors(indexes, self.palette)
+
+    def calc_rgba5555_direct(self):
+        self.rgba5555 = [uint16_to_rgb555(c) + [31 * (c >> 15)] for c in
+                to_uint_list(self.tex_bytestr, 0, 2, self.width * self.height)]
+
+    def calc_rgba5555_compressed(self):
+        self.rgba5555 = [None for _ in range(self.width * self.height)]
+        pal_index_offset = self.width * self.height // 4
+        self.palette += [[0, 0, 0, 0] for i in range(2)] # in case of optimization
+
+        for y in range(self.height // 4):
+            for x in range(self.width // 4):
+                texel_int = to_uint(self.tex_bytestr, (y * (self.width // 4) + x) * 4, 4)
+                texel = [texel_int >> (2 * i) & 3 for i in range(16)]
+
+                pal_int = to_uint(self.tex_bytestr,
+                        pal_index_offset + (y * (self.width // 4) + x) * 2, 2)
+                pal_index = (pal_int % 2 ** 14) * 2
+                interp = pal_int >> 14 & 1
+                transparency = not (pal_int >> 15 & 1)
+
+                colors = self.palette[pal_index:][:2] + [None] * 2
+                if transparency:
+                    colors[3] = [0, 0, 0, 0]
+                    colors[2] = [int_round_mid_up((c0 + c1) // 2) for c0, c1 in
+                            zip(colors[0], colors[1])] \
+                                    if interp else self.palette[pal_index + 2]
+
+                elif interp:
+                    colors[2] = [int_round_mid_up((c0 * 5 + c1 * 3) // 8) for c0, c1 in
+                            zip(colors[0], colors[1])] 
+                    colors[3] = [int_round_mid_up((c0 * 3 + c1 * 5) // 8) for c0, c1 in
+                            zip(colors[0], colors[1])] 
+
+                else:
+                    for i in range(2,4):
+                        colors[i] = self.palette[pal_index + i]
+
+                texel_colors = Texture.get_colors(texel, colors)
+                for i in range(4):
+                    offset = (4 * y + i) * self.width + 4 * x
+                    self.rgba5555[offset : offset + 4] = texel_colors[4 * i:][:4]
+                    
+
+    def calc_bpy_texture(self, name):
+        self.texture = bpy.data.textures.new(name, "IMAGE")
+        if self.pal_bytestr:
+            self.palette = [uint16_to_rgb555(c) + [31] for c in 
+                    to_uint_list(self.pal_bytestr, 0, 2, len(self.pal_bytestr) // 2)]
+
+        if self.type in (Texture.A3I5, Texture.A5I3): 
+            self.calc_rgba5555_alpha(3 if self.type == Texture.A3I5 else 5) 
+
+        elif self.type in (Texture.COLOR_4, Texture.COLOR_16, Texture.COLOR_256):
+            self.calc_rgba5555_ncol(2 if self.type == Texture.COLOR_4 else
+                    4 if self.type == Texture.COLOR_16 else 8)
+
+        elif self.type == Texture.COLOR_DIRECT:
+            self.calc_rgba5555_direct()
+
+        elif self.type == Texture.COMPRESSED:
+            self.calc_rgba5555_compressed()
+
+        else:
+            raise Exception("Unknown type: " + hex(self.type) + 
+                    " in texture: " + name)
+
+        image = bpy.data.images.new(name, self.width, self.height, True, True)
+        image.colorspace_settings.name = "sRGB"
+        image.pixels = [((v / 31) ** 2.2 if i % 4 != 3 else v / 31)
+                for c in self.rgba5555 for i, v in enumerate(c)]
+        self.texture.image = image
+
+        if self.type in (Texture.COLOR_16, Texture.COLOR_256, Texture.COLOR_DIRECT):
+            self.texture["Uncompressed"] = 1
+
+    def from_bytestr(tex_bytestr, pal_bytestr, name, width, height, type_, transparency):
+        tex = Texture()
+        tex.tex_bytestr = tex_bytestr
+        tex.pal_bytestr = pal_bytestr
+        tex.width = width
+        tex.height = height
+        tex.type = type_
+        tex.transparency = transparency
+        tex.calc_bpy_texture(name)
+        return tex
+
 
 class AlignedBytes:
     def __init__(self, bytestr, byte_align):
