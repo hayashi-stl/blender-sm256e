@@ -284,22 +284,32 @@ class Geometry:
 
 
 class Bone:
-    def __init__(self, name, parent_id, rel_transform, material_ids):
+    def __init__(self, name, parent_id, sibling_id, rel_transform, material_ids, displist_ids):
         """
         name: string
         parent_id: int (-1 means no parent),
+        sibling_id: int (-1 means last sibling),
         rel_transform: Matrix (a 4x4 matrix),
         material_ids: {int}
+        displist_ids: {int}
         """
         self.name = name
         self.parent_id = parent_id
+        self.sibling_id = sibling_id
         self.rel_transform = rel_transform
         self.material_ids = material_ids
+        self.displist_ids = displist_ids
 
     def attach_to(self, skeleton):
         self.parent = skeleton.bones[self.parent_id] if self.parent_id >= 0 else None
         self.abs_transform = self.parent.abs_transform * self.rel_transform \
                 if self.parent else self.rel_transform
+
+    def update_parent_lists(self, skeleton):
+        self.sibling = skeleton.bones[self.sibling_id] if self.sibling_id >= 0 else None
+        if self.parent:
+            self.parent.material_ids |= self.material_ids
+            self.parent.displist_ids |= self.displist_ids
 
 class Skeleton:
     def __init__(self, bones):
@@ -309,6 +319,8 @@ class Skeleton:
         self.bones = bones
         for bone in bones:
             bone.attach_to(self)
+        for bone in reversed(bones):
+            bone.update_parent_lists(self)
 
 class Texel4x4:
     def __init__(self, colors):

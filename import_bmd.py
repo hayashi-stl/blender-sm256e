@@ -11,6 +11,9 @@ def import_bone(bytestr, bone_bytes):
     name = cstr_to_str(bytestr, to_uint(bone_bytes, 4, 4))
     parent_id = to_int(bone_bytes, 8, 2)
     parent_id = -1 if parent_id == 0 else bone_id + parent_id
+    sibling_id = to_int(bone_bytes, 0xc, 2)
+    sibling_id = -1 if sibling_id == 0 else bone_id + sibling_id
+    print(bone_id, sibling_id)
 
     # Transform
     scale = to_vec(bone_bytes, 0x10, 4, 3, 12)
@@ -28,7 +31,7 @@ def import_bone(bytestr, bone_bytes):
     mat_ids = to_uint_list(bytestr, to_uint(bone_bytes, 0x34, 4), 1, num_pairs)
     displist_ids = to_uint_list(bytestr, to_uint(bone_bytes, 0x38, 4), 1, num_pairs)
 
-    bone = Bone(name, parent_id, transform, set(mat_ids))
+    bone = Bone(name, parent_id, sibling_id, transform, set(mat_ids), set(displist_ids))
     return bone, {m: d for m, d in zip(mat_ids, displist_ids)}
     
 
@@ -210,7 +213,7 @@ def import_display_lists(bytestr, skeleton, displist_material_map):
 
     return Geometry(vertices, faces, False)
 
-def import_texture(bytestr, texture_id, palette_id, material):
+def import_texture(bytestr, texture_id, palette_id, material, tex_cache):
     if texture_id < 0:
         return
 
@@ -219,31 +222,40 @@ def import_texture(bytestr, texture_id, palette_id, material):
             if palette_id >= 0 else None
 
     name = cstr_to_str(bytestr, to_uint(tex_bytes, 0, 4))
-    size = to_uint(tex_bytes, 0x8, 4)
-    width = to_uint(tex_bytes, 0xc, 2)
-    height = to_uint(tex_bytes, 0xe, 2)
+    pal_name = cstr_to_str(bytestr, to_uint(pal_bytes, 0, 4)) if palette_id >= 0 else None
 
-    tex_param = to_uint(tex_bytes, 0x10, 4)
-    type_ = tex_param >> 26 & 7
-    transparency = tex_param >> 29 & 1
-    if type_ == Texture.COMPRESSED:
-        size = size * 3 // 2
+    tex = None
+    if (name, pal_name) in tex_cache:
+        tex = tex_cache[(name, pal_name)]
 
-    tex_data = get_n_bytes(bytestr, to_uint(tex_bytes, 4, 4), size)
-    pal_data = get_n_bytes(bytestr, to_uint(pal_bytes, 4, 4), to_uint(pal_bytes, 8, 4)) \
-            if palette_id >= 0 else None
+    else:
+        size = to_uint(tex_bytes, 0x8, 4)
+        width = to_uint(tex_bytes, 0xc, 2)
+        height = to_uint(tex_bytes, 0xe, 2)
 
-    tex = Texture.from_bytestr(tex_data, pal_data, name, width, height, type_, transparency)
+        tex_param = to_uint(tex_bytes, 0x10, 4)
+        type_ = tex_param >> 26 & 7
+        transparency = tex_param >> 29 & 1
+        if type_ == Texture.COMPRESSED:
+            size = size * 3 // 2
+
+        tex_data = get_n_bytes(bytestr, to_uint(tex_bytes, 4, 4), size)
+        pal_data = get_n_bytes(bytestr, to_uint(pal_bytes, 4, 4), to_uint(pal_bytes, 8, 4)) \
+                if palette_id >= 0 else None
+
+        tex = Texture.from_bytestr(tex_data, pal_data, name, width, height, type_, transparency)
+        tex_cache[(name, pal_name)] = tex
+
     slot = material.texture_slots.add()
     slot.texture = tex.texture
     return tex.texture
 
 
-def import_material(bytestr, material_bytes, material_id, mesh, geo):
+def import_material(bytestr, material_bytes, material_id, mesh, geo, tex_cache):
     material = bpy.data.materials.new(cstr_to_str(bytestr, to_uint(material_bytes, 0, 4)))
     mesh.materials.append(material)
     tex = import_texture(bytestr, to_int(material_bytes, 4, 4), to_int(material_bytes, 8, 4),
-            material)
+            material, tex_cache)
 
     transparency = any(i % 4 == 3 and v < 1 for i, v in enumerate(tex.image.pixels)) \
             if tex else False
@@ -289,6 +301,7 @@ def import_material(bytestr, material_bytes, material_id, mesh, geo):
     material.ambient = ambient
     material.use_vertex_color_paint = all(v.normal is None
             for f in geo.faces for v in f.vertices if f.material_id == material_id)
+    material.use_shadeless = material.use_vertex_color_paint
     
     spec_emit = to_uint(material_bytes, 0x2c, 4)
     specular = uint16_to_color(spec_emit, 2.2)
@@ -298,19 +311,21 @@ def import_material(bytestr, material_bytes, material_id, mesh, geo):
     material.emit = emission
 
 
-def import_materials(bytestr, mesh, geo):
+def import_materials(bytestr, mesh, geo, material_ids, tex_cache):
     material_offset = to_uint(bytestr, 0x28, 4)
 
     for i in range(to_uint(bytestr, 0x24, 4)):
-        import_material(bytestr, get_n_bytes(bytestr, material_offset + i * 0x30, 0x30),
-                i, mesh, geo)
+        if i in material_ids:
+            import_material(bytestr, get_n_bytes(bytestr, material_offset + i * 0x30, 0x30),
+                    i, mesh, geo, tex_cache)
 
     counter = 0
+    material_table = {m: i for i, m in enumerate(sorted(material_ids))}
     for face, poly in zip(geo.faces, mesh.polygons):
-        poly.material_index = face.material_id
+        poly.material_index = material_table[face.material_id]
 
         # UV downscaling
-        material = mesh.materials[face.material_id]
+        material = mesh.materials[material_table[face.material_id]]
         if material.texture_slots[0]:
             size = material.texture_slots[0].texture.image.size
             for i in range(counter, counter + len(face.vertices)):
@@ -327,8 +342,14 @@ def load(context, filepath):
 
     scale = 2 ** to_uint(bytestr, 0, 4)
     skeleton, displist_material_map = import_bones(bytestr)
-    geo = import_display_lists(bytestr, skeleton, displist_material_map)
-    mesh = geo.create_mesh(context, PurePath(filepath).stem, skeleton, scale)
-    import_materials(bytestr, mesh, geo)
+
+    bone = skeleton.bones[0]
+    tex_cache = {} # maps (tex_name, pal_name) to texture
+    while bone:
+        geo = import_display_lists(bytestr, skeleton, 
+                {d: m for d, m in displist_material_map.items() if d in bone.displist_ids})
+        mesh = geo.create_mesh(context, PurePath(filepath).stem, skeleton, scale)
+        import_materials(bytestr, mesh, geo, bone.material_ids, tex_cache)
+        bone = bone.sibling
 
     return {"FINISHED"}

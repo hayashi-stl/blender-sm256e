@@ -34,7 +34,7 @@ def export_bone(bone, bones, materials, mesh, meshes, group_names):
     sibling_id = 1 if bone_id < num_bones - 1 else 0
     if bone:
         later_siblings = [b for b in bones[bone_id + 1:] if b.parent == bone.parent]
-        sibling_id = bones.find(later_siblings[0].name) if later_siblings else 0
+        sibling_id = bones.find(later_siblings[0].name) - bone_id if later_siblings else 0
     bytestr += from_int(sibling_id, 2)
     bytestr += from_uint(0, 2) # padding
     
