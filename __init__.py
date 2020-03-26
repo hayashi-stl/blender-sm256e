@@ -1,7 +1,7 @@
 import bpy
 from bpy.props import StringProperty, BoolProperty, FloatProperty, EnumProperty
 
-from bpy_extras.io_utils import ExportHelper
+from bpy_extras.io_utils import ExportHelper, ImportHelper
 bl_info = {
     "name": "SM256e",
     "author": "Josh65536",
@@ -14,6 +14,25 @@ if "bpy" in locals():
     if "export_bmd" in locals():
         importlib.reload(export_bmd)  # noqa
 
+class ImportBMD(bpy.types.Operator, ImportHelper):
+    bl_idname = "import_scene.bmd"
+    bl_label = "Import BMD"
+    bl_options = {"PRESET"}
+
+    filename_ext = ".bmd"
+    filter_glob = StringProperty(default="*.bmd", options={"HIDDEN"})
+
+    @property
+    def check_extension(self):
+        return True
+
+    def execute(self, context):
+        if not self.filepath:
+            raise Exception("filepath not set")
+
+        from . import import_bmd
+        return import_bmd.load(context, self.filepath)
+    
 
 class ExportBMD(bpy.types.Operator, ExportHelper):
     """Selection to BMD"""
@@ -36,20 +55,26 @@ class ExportBMD(bpy.types.Operator, ExportHelper):
         return export_bmd.save(context, self.filepath)
 
 
-def menu_func(self, context):
+def export_menu_func(self, context):
     self.layout.operator(ExportBMD.bl_idname, text="NDS Binary Model Format (.bmd)")
+
+
+def import_menu_func(self, context):
+    self.layout.operator(ImportBMD.bl_idname, text="NDS Binary Model Format (.bmd)")
 
 
 def register():
     bpy.utils.register_module(__name__)
 
-    bpy.types.INFO_MT_file_export.append(menu_func)
+    bpy.types.INFO_MT_file_import.append(import_menu_func)
+    bpy.types.INFO_MT_file_export.append(export_menu_func)
 
 
 def unregister():
     bpy.utils.unregister_module(__name__)
 
-    bpy.types.INFO_MT_file_export.remove(menu_func)
+    bpy.types.INFO_MT_file_import.remove(import_menu_func)
+    bpy.types.INFO_MT_file_export.remove(export_menu_func)
 
 if __name__ == "__main__":
     register()

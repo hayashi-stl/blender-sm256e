@@ -1,3 +1,4 @@
+import bpy
 from mathutils import Color, Vector
 from functools import reduce
 from itertools import permutations, takewhile, chain
@@ -5,25 +6,47 @@ from itertools import permutations, takewhile, chain
 def int_round_mid_up(num):
     return int((num + 0.5) // 1)
 
-def get_n_bytes(bytestr, offset, len):
-    return bytestr[offset : offset + len]
+def get_n_bytes(bytestr, offset, len_):
+    return bytestr[offset : offset + len_]
 
 def to_int(bytestr, offset, num_bytes):
     return int.from_bytes(bytestr[offset : offset+num_bytes], byteorder="little", signed=True)
+
 def to_uint(bytestr, offset, num_bytes):
     return int.from_bytes(bytestr[offset : offset+num_bytes], byteorder="little", signed=False)
 
-def sign_int10(integer):
-    return integer - 0x400 if integer >= 0x200 else integer
-def to_color(bytestr, offset, gamma):
-    vec = to_uint(bytestr, offset, 2)
-    return Color(Vector((vec & 0x1f, vec >> 5 & 0x1f, vec >> 10 & 0x1f)) * 1.0 / 0x1f)
-def to_uvec30(bytestr, offset):
-    vec = to_uint(bytestr, offset, 4)
-    return Vector((vec & 0x3ff, vec >> 10 & 0x3ff, vec >> 20 & 0x3ff))
-def to_vec30(bytestr, offset):
-    vec = to_uint(bytestr, offset, 4)
-    return Vector((sign_int10(vec & 0x3ff), sign_int10(vec >> 10 & 0x3ff), sign_int10(vec >> 20 & 0x3ff)))
+def int_to_fix(integer, bit_precision):
+    return integer / (1 << bit_precision)
+
+def to_fix(bytestr, offset, num_bytes, bit_precision):
+    return int_to_fix(to_int(bytestr, offset, num_bytes), bit_precision)
+
+def to_deg(bytestr, offset):
+    return to_int(bytestr, offset, 2) * 360 / 65536
+
+def to_uint_list(bytestr, offset, bytes_per_elem, num_elems):
+    return [to_uint(bytestr, offset + bytes_per_elem * i, bytes_per_elem) 
+            for i in range(num_elems)]
+
+def to_vec(bytestr, offset, bytes_per_elem, num_elems, bit_precision):
+    return [to_fix(bytestr, offset + bytes_per_elem * i, bytes_per_elem, bit_precision)
+            for i in range(num_elems)]
+
+def sign_int(integer, num_bits):
+    return (integer + 2 ** (num_bits - 1)) % 2 ** num_bits - 2 ** (num_bits - 1)
+
+def to_vecb(bytestr, offset, bits_per_elem, num_elems, bit_precision):
+    long_int = to_uint(bytestr, offset, (bits_per_elem * num_elems + 7) // 8)
+    return [int_to_fix(sign_int((long_int >> bits_per_elem * i) % (1 << bits_per_elem),
+        bits_per_elem), bit_precision) for i in range(num_elems)]
+
+def uint16_to_rgb555(integer):
+    return [integer & 0x1f, integer >> 5 & 0x1f, integer >> 10 & 0x1f]
+
+def uint16_to_color(integer, gamma, scale=1):
+    return Color([(c / 31 / scale) ** gamma for c in uint16_to_rgb555(integer)]) \
+            if scale != 0 else Color((0, 0, 0))
+
 def cstr_to_str(bytestr, offset):
     end = offset
     while bytestr[end] != 0x00:
@@ -94,11 +117,13 @@ class Vertex:
         return hash((self.position, self.normal, self.uv, self.color, self.group))
 
 class Face:
-    def __init__(self, vertices):
+    def __init__(self, vertices, material_id = None):
         """
         vertices: [Vertex]
+        material_id: int | None
         """
         self.vertices = vertices[:]
+        self.material_id = material_id
 
     def can_connect_to(self, other):
         """ Whether this face can be connected to the other face when making
@@ -115,7 +140,7 @@ class Face:
         return (len(self.vertices) == 3 or 2 not in diffs) and diffs[0] != diffs[1]
 
 class Geometry:
-    def __init__(self, vertices, faces):
+    def __init__(self, vertices, faces, compute_face_graph = True):
         """
         vertices: [Vertex]
         faces: [Face]
@@ -124,7 +149,8 @@ class Geometry:
         self.vertices = vertices[:]
         self.faces = faces[:]
 
-        self.face_graph = [{j for j, other in enumerate(self.faces) \
+        if compute_face_graph:
+            self.face_graph = [{j for j, other in enumerate(self.faces) \
                 if face.can_connect_to(other)} for face in self.faces]
 
     def strip(self):
@@ -221,6 +247,51 @@ class Geometry:
                     tris += strip
 
         return (tri_strips, quad_strips, tris, quads)
+
+    def create_mesh(self, context, name, skeleton, scale):
+        mesh = bpy.data.meshes.new(name)
+        obj = bpy.data.objects.new(name, mesh)
+        
+        context.scene.objects.link(obj)
+        context.scene.objects.active = obj
+        obj.select = True
+
+        vertices = [scale * v.position for v in self.vertices]
+        faces = [[self.vertices.index(v) for v in f.vertices] for f in self.faces]
+        mesh.from_pydata(vertices, [], faces)
+
+        for face in mesh.polygons:
+            face.use_smooth = True
+
+        return mesh
+
+
+class Bone:
+    def __init__(self, name, parent_id, rel_transform, material_ids):
+        """
+        name: string
+        parent_id: int (-1 means no parent),
+        rel_transform: Matrix (a 4x4 matrix),
+        material_ids: {int}
+        """
+        self.name = name
+        self.parent_id = parent_id
+        self.rel_transform = rel_transform
+        self.material_ids = material_ids
+
+    def attach_to(self, skeleton):
+        self.parent = skeleton.bones[self.parent_id] if self.parent_id >= 0 else None
+        self.abs_transform = self.parent.abs_transform * self.rel_transform \
+                if self.parent else self.rel_transform
+
+class Skeleton:
+    def __init__(self, bones):
+        """
+        bones: [Bone]
+        """
+        self.bones = bones
+        for bone in bones:
+            bone.attach_to(self)
 
 class Texel4x4:
     def __init__(self, colors):
