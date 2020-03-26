@@ -1,4 +1,5 @@
 import bpy
+import bmesh
 from mathutils import Color, Vector
 from functools import reduce
 from itertools import permutations, takewhile, chain
@@ -103,18 +104,6 @@ class Vertex:
         self.uv = Vector(uv).freeze() if uv else None
         self.color = Color(color).freeze() if color else None
         self.group = group
-
-    def __eq__(self, other):
-        if not isinstance(other, Vertex):
-            return False
-        return self.position == other.position and \
-                self.normal == other.normal and \
-                self.uv == other.uv and \
-                self.color == other.color and \
-                self.group == other.group
-
-    def __hash__(self):
-        return hash((self.position, self.normal, self.uv, self.color, self.group))
 
 class Face:
     def __init__(self, vertices, material_id = None):
@@ -249,6 +238,12 @@ class Geometry:
         return (tri_strips, quad_strips, tris, quads)
 
     def create_mesh(self, context, name, skeleton, scale):
+        get_equiv = lambda v: (v.position, v.normal, v.group)
+
+        equiv = {}
+        for v in self.vertices:
+            equiv.setdefault(get_equiv(v), []).append(v)
+
         mesh = bpy.data.meshes.new(name)
         obj = bpy.data.objects.new(name, mesh)
         
@@ -256,8 +251,12 @@ class Geometry:
         context.scene.objects.active = obj
         obj.select = True
 
-        vertices = [scale * v.position for v in self.vertices]
-        faces = [[self.vertices.index(v) for v in f.vertices] for f in self.faces]
+        equiv_vertices = [v for v in self.vertices if equiv[get_equiv(v)][0] == v]
+        vertices = [skeleton.bones[v.group].abs_transform * (scale * v.position) 
+                for v in equiv_vertices]
+        faces = [[equiv_vertices.index(equiv[get_equiv(v)][0]) for v in f.vertices]
+                for f in self.faces]
+        
         mesh.from_pydata(vertices, [], faces)
 
         for face in mesh.polygons:
