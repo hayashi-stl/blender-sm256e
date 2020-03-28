@@ -19,10 +19,10 @@ def import_bone(bytestr, bone_bytes):
     rotation = Euler([math.radians(to_deg(bone_bytes, 0x1c + i * 2) * 16)
             for i in range(3)], "XYZ")
     translation = to_vec(bone_bytes, 0x24, 4, 3, 12)
-    transform = Matrix.Translation(translation) * \
-            rotation.to_matrix().to_4x4() * \
-            Matrix.Scale(scale[0], 4, Vector((1, 0, 0))) * \
-            Matrix.Scale(scale[1], 4, Vector((0, 1, 0))) * \
+    transform = Matrix.Translation(translation) @ \
+            rotation.to_matrix().to_4x4() @ \
+            Matrix.Scale(scale[0], 4, Vector((1, 0, 0))) @ \
+            Matrix.Scale(scale[1], 4, Vector((0, 1, 0))) @ \
             Matrix.Scale(scale[2], 4, Vector((0, 0, 1)))
 
     # Material display-list pairs
@@ -245,6 +245,8 @@ def import_texture(bytestr, texture_id, palette_id, material, tex_cache):
         tex = Texture.from_bytestr(tex_data, pal_data, name, width, height, type_, transparency)
         tex_cache[(name, pal_name)] = tex
 
+    return tex.texture
+    #TODO: Shaders
     slot = material.texture_slots.add()
     slot.texture = tex.texture
     return tex.texture
@@ -275,18 +277,18 @@ def import_material(bytestr, material_bytes, material_id, mesh, geo, tex_cache):
     # Polygon parameters
     poly_param = to_uint(material_bytes, 0x24, 4)
     blend_type = poly_param >> 4 & 3
-    if tex:
+    if False: #TODO: tex:
         material.texture_slots[0].blend_type = "MIX" if blend_type == 1 else "MULTIPLY"
-    material.game_settings.use_backface_culling = not (poly_param >> 6 & 1)
+    material.use_backface_culling = not (poly_param >> 6 & 1)
     if poly_param >> 14 & 1:
         material["Depth Equal"] = 1
 
     alpha = poly_param >> 16 & 0x1f
     if (transparency and blend_type != 1) or alpha != 31:
-        if tex:
+        if False: #TODO: tex:
             material.texture_slots[0].use_map_alpha = True
-        material.use_transparency = True
-        material.alpha = alpha / 31
+        #material.use_transparency = True
+        #material.alpha = alpha / 31
 
     material["Polygon ID"] = poly_param >> 24 & 0x3f
 
@@ -295,7 +297,10 @@ def import_material(bytestr, material_bytes, material_id, mesh, geo, tex_cache):
     diffuse = uint16_to_color(diff_amb, 2.2)
     ambient = sum(uint16_to_color(diff_amb >> 16, 1)) / sum(diffuse) \
             if sum(diffuse) > 0 else 0.5
-    material.diffuse_color = diffuse
+    material.diffuse_color = tuple(diffuse) + (1,)
+    return
+
+    # TODO: Use shaders
     material.diffuse_intensity = 1
     material.ambient = ambient
     material.use_vertex_color_paint = all(v.normal is None
@@ -325,7 +330,7 @@ def import_materials(bytestr, mesh, geo, material_ids, tex_cache):
 
         # UV downscaling
         material = mesh.materials[material_table[face.material_id]]
-        if material.texture_slots[0]:
+        if False: #TODO material.texture_slots[0]:
             size = material.texture_slots[0].texture.image.size
             for i in range(counter, counter + len(face.vertices)):
                 for j in range(2):

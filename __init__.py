@@ -6,7 +6,7 @@ from bpy_extras.io_utils import ExportHelper, ImportHelper
 bl_info = {
     "name": "SM256e",
     "author": "Josh65536",
-    "blender": (2, 7, 9),
+    "blender": (2, 82, 0),
     "description": ("Adds tools for Super Mario 256 development"),
     "category": "Import-Export"}
 
@@ -21,7 +21,7 @@ class ImportBMD(bpy.types.Operator, ImportHelper):
     bl_options = {"PRESET"}
 
     filename_ext = ".bmd"
-    filter_glob = StringProperty(default="*.bmd", options={"HIDDEN"})
+    filter_glob: StringProperty(default="*.bmd", options={"HIDDEN"})
 
     @property
     def check_extension(self):
@@ -42,7 +42,7 @@ class ExportBMD(bpy.types.Operator, ExportHelper):
     bl_options = {"PRESET"}
 
     filename_ext = ".bmd"
-    filter_glob = StringProperty(default="*.bmd", options={"HIDDEN"})
+    filter_glob: StringProperty(default="*.bmd", options={"HIDDEN"})
 
     @property
     def check_extension(self):
@@ -62,7 +62,7 @@ class ImportLevelJson(bpy.types.Operator, ExportHelper):
     bl_options = {"PRESET"}
 
     filename_ext = ".json"
-    filter_glob = StringProperty(default="*.json", options={"HIDDEN"})
+    filter_glob: StringProperty(default="*.json", options={"HIDDEN"})
 
     @property
     def check_extension(self):
@@ -82,7 +82,7 @@ class ExportLevelJson(bpy.types.Operator, ExportHelper):
     bl_options = {"PRESET"}
 
     filename_ext = ".json"
-    filter_glob = StringProperty(default="*.json", options={"HIDDEN"})
+    filter_glob: StringProperty(default="*.json", options={"HIDDEN"})
 
     @property
     def check_extension(self):
@@ -112,13 +112,17 @@ def import_json_menu_func(self, context):
     self.layout.operator(ImportLevelJson.bl_idname, text="SM256 Level JSON (.json)")
 
 
-def register():
-    bpy.utils.register_module(__name__)
+bpy_classes = (ImportBMD, ExportLevelJson, ImportLevelJson)
+bpy_class_register, bpy_class_unregister = bpy.utils.register_classes_factory(bpy_classes)
 
-    bpy.types.INFO_MT_file_import.append(import_menu_func)
-    bpy.types.INFO_MT_file_export.append(export_menu_func)
-    bpy.types.INFO_MT_file_import.append(import_json_menu_func)
-    bpy.types.INFO_MT_file_export.append(export_json_menu_func)
+def register():
+    bpy_class_register()
+
+    # Suppress the BMD exporter until vertex color baking is supported
+    bpy.types.TOPBAR_MT_file_import.append(import_menu_func)
+    # bpy.types.TOPBAR_MT_file_export.append(export_menu_func)
+    bpy.types.TOPBAR_MT_file_import.append(import_json_menu_func)
+    bpy.types.TOPBAR_MT_file_export.append(export_json_menu_func)
 
     from .spoiler import main
     for c in main.bpy_classes:
@@ -127,12 +131,12 @@ def register():
 
 
 def unregister():
-    bpy.utils.unregister_module(__name__)
+    bpy_class_unregister()
 
-    bpy.types.INFO_MT_file_import.remove(import_menu_func)
-    bpy.types.INFO_MT_file_export.remove(export_menu_func)
-    bpy.types.INFO_MT_file_import.remove(import_json_menu_func)
-    bpy.types.INFO_MT_file_export.remove(export_json_menu_func)
+    bpy.types.TOPBAR_MT_file_import.remove(import_menu_func)
+    # bpy.types.TOPBAR_MT_file_export.remove(export_menu_func)
+    bpy.types.TOPBAR_MT_file_import.remove(import_json_menu_func)
+    bpy.types.TOPBAR_MT_file_export.remove(export_json_menu_func)
 
     from .spoiler import main
     for c in main.bpy_classes:

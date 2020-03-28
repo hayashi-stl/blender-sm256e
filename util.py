@@ -247,12 +247,13 @@ class Geometry:
         mesh = bpy.data.meshes.new(name)
         obj = bpy.data.objects.new(name, mesh)
         
-        context.scene.objects.link(obj)
-        context.scene.objects.active = obj
-        obj.select = True
+        col = bpy.data.collections.get("Collection")
+        col.objects.link(obj)
+        context.view_layer.objects.active = obj
+        obj.select_set(True)
 
         equiv_vertices = [v for v in self.vertices if equiv[get_equiv(v)][0] == v]
-        vertices = [skeleton.bones[v.group].abs_transform * (scale * v.position) 
+        vertices = [skeleton.bones[v.group].abs_transform @ (scale * v.position) 
                 for v in equiv_vertices]
         faces = [[equiv_vertices.index(equiv[get_equiv(v)][0]) for v in f.vertices]
                 for f in self.faces]
@@ -264,7 +265,7 @@ class Geometry:
 
         # UV
         if any(v.uv for v in self.vertices):
-            mesh.uv_textures.new("UVMap")
+            mesh.uv_layers.new(name="UVMap")
             uvs = [v.uv if v.uv else Vector((0, 0)) 
                     for f in self.faces for v in f.vertices]
 
@@ -273,12 +274,12 @@ class Geometry:
 
         # Vertex colors
         if any(v.color for v in self.vertices):
-            mesh.vertex_colors.new("Col")
+            mesh.vertex_colors.new(name="Col")
             colors = [v.color if v.color else Color((1, 1, 1))
                     for f in self.faces for v in f.vertices]
 
             for i, data in enumerate(mesh.vertex_colors[0].data):
-                data.color = colors[i]
+                data.color = tuple(colors[i]) + (1,)
 
         return obj
 
@@ -693,7 +694,7 @@ class Texture:
             raise Exception("Unknown type: " + hex(self.type) + 
                     " in texture: " + name)
 
-        image = bpy.data.images.new(name, self.width, self.height, True, True)
+        image = bpy.data.images.new(name, self.width, self.height, alpha=True, float_buffer=True)
         image.colorspace_settings.name = "sRGB"
         image.pixels = [((v / 31) ** 2.2 if i % 4 != 3 else v / 31)
                 for c in self.rgba5555 for i, v in enumerate(c)]
