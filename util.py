@@ -280,7 +280,7 @@ class Geometry:
             for i, data in enumerate(mesh.vertex_colors[0].data):
                 data.color = colors[i]
 
-        return mesh
+        return obj
 
 
 class Bone:

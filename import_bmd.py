@@ -13,7 +13,6 @@ def import_bone(bytestr, bone_bytes):
     parent_id = -1 if parent_id == 0 else bone_id + parent_id
     sibling_id = to_int(bone_bytes, 0xc, 2)
     sibling_id = -1 if sibling_id == 0 else bone_id + sibling_id
-    print(bone_id, sibling_id)
 
     # Transform
     scale = to_vec(bone_bytes, 0x10, 4, 3, 12)
@@ -335,7 +334,7 @@ def import_materials(bytestr, mesh, geo, material_ids, tex_cache):
         counter += len(face.vertices)
 
 
-def load(context, filepath):
+def load_ret(context, filepath):
     bytestr = None
     with open(filepath, "rb") as f:
         bytestr = f.read()
@@ -345,11 +344,17 @@ def load(context, filepath):
 
     bone = skeleton.bones[0]
     tex_cache = {} # maps (tex_name, pal_name) to texture
+    objs = []
     while bone:
         geo = import_display_lists(bytestr, skeleton, 
                 {d: m for d, m in displist_material_map.items() if d in bone.displist_ids})
-        mesh = geo.create_mesh(context, PurePath(filepath).stem, skeleton, scale)
-        import_materials(bytestr, mesh, geo, bone.material_ids, tex_cache)
+        obj = geo.create_mesh(context, PurePath(filepath).stem, skeleton, scale)
+        import_materials(bytestr, obj.data, geo, bone.material_ids, tex_cache)
         bone = bone.sibling
+        objs.append(obj)
 
+    return objs
+
+def load(context, filepath):
+    load_ret(context, filepath)
     return {"FINISHED"}
