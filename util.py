@@ -280,7 +280,7 @@ class Geometry:
             for i, data in enumerate(mesh.vertex_colors[0].data):
                 data.color = colors[i]
 
-        return mesh
+        return obj
 
 
 class Bone:
@@ -693,10 +693,9 @@ class Texture:
             raise Exception("Unknown type: " + hex(self.type) + 
                     " in texture: " + name)
 
-        image = bpy.data.images.new(name, self.width, self.height, True, True)
+        image = bpy.data.images.new(name, self.width, self.height, True)
         image.colorspace_settings.name = "sRGB"
-        image.pixels = [((v / 31) ** 2.2 if i % 4 != 3 else v / 31)
-                for c in self.rgba5555 for i, v in enumerate(c)]
+        image.pixels = [v / 31 for c in self.rgba5555 for i, v in enumerate(c)]
         self.texture.image = image
 
         if self.type in (Texture.COLOR_16, Texture.COLOR_256, Texture.COLOR_DIRECT):

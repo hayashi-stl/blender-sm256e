@@ -1,4 +1,5 @@
 import bpy
+import os
 from bpy.props import StringProperty, BoolProperty, FloatProperty, EnumProperty
 
 from bpy_extras.io_utils import ExportHelper, ImportHelper
