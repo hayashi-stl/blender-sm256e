@@ -60,9 +60,6 @@ def export_bone(bone, bones, materials, mesh, meshes, group_names):
     else:
         start = sum(len(m.materials) for m in meshes[:bone_id])
         indexes = list(range(start, start + len(materials)))
-    if len(indexes) > 32:
-        print("You can have at most 32 bones. (This is probably not the limit, " +
-                "but exporting more than 32 bones is tricky and not supported right now.)")
     bytestr += from_uint(len(indexes), 4)
     bytestr += from_uint(0, 4) * 2 # placeholder pointers
 
@@ -204,6 +201,10 @@ def export_display_list(mesh, material, bones, group_names, scale_factor):
         else:
             counter += len(face.vertices)
             
+    if len({v.group for v in vertices}) > 32:
+        raise Exception("You can have at most 32 bones. (This is probably not the limit, " +
+                "but exporting more than 32 bones is tricky and not supported right now.)")
+
     # Transform ID list
     transform_ids = list({v.group for v in vertices})
     header_bytestr += from_uint(len(transform_ids), 4)

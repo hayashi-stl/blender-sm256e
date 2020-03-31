@@ -105,6 +105,13 @@ class Vertex:
         self.color = Color(color).freeze() if color else None
         self.group = group
 
+    def rep(self):
+        return (self.position, self.normal, self.uv, self.color, self.group)
+
+    def from_rep(rep):
+        return Vertex(*rep)
+
+
 class Face:
     def __init__(self, vertices, material_id = None):
         """
@@ -126,6 +133,7 @@ class Face:
 
         diffs = [(vs.index(shared[0]) - vs.index(shared[1])) % len(vs) \
                 for vs in (self.vertices, other.vertices)]
+
         return (len(self.vertices) == 3 or 2 not in diffs) and diffs[0] != diffs[1]
 
 class Geometry:
@@ -139,6 +147,13 @@ class Geometry:
         self.faces = faces[:]
 
         if compute_face_graph:
+            # Vertices with equal reps are equivalent, so make them identical
+            by_rep = {v.rep(): v for v in self.vertices}
+            self.vertices = list(by_rep.values())
+
+            for face in self.faces:
+                face.vertices = [by_rep[v.rep()] for v in face.vertices]
+
             self.face_graph = [{j for j, other in enumerate(self.faces) \
                 if face.can_connect_to(other)} for face in self.faces]
 
