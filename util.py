@@ -105,6 +105,12 @@ class Vertex:
         self.color = Color(color).freeze() if color else None
         self.group = group
 
+    def rep(self):
+        return (self.position, self.normal, self.uv, self.color, self.group)
+
+    def from_rep(rep):
+        return Vertex(*rep)
+
 class Face:
     def __init__(self, vertices, material_id = None):
         """
@@ -139,6 +145,13 @@ class Geometry:
         self.faces = faces[:]
 
         if compute_face_graph:
+            # Vertices with equal reps are equivalent, so make them identical
+            by_rep = {v.rep(): v for v in self.vertices}
+            self.vertices = list(by_rep.values())
+
+            for face in self.faces:
+                face.vertices = [by_rep[v.rep()] for v in face.vertices]
+
             self.face_graph = [{j for j, other in enumerate(self.faces) \
                 if face.can_connect_to(other)} for face in self.faces]
 
@@ -247,8 +260,7 @@ class Geometry:
         mesh = bpy.data.meshes.new(name)
         obj = bpy.data.objects.new(name, mesh)
         
-        col = bpy.data.collections.get("Collection")
-        col.objects.link(obj)
+        context.scene.collection.objects.link(obj)
         context.view_layer.objects.active = obj
         obj.select_set(True)
 
@@ -671,8 +683,7 @@ class Texture:
                     self.rgba5555[offset : offset + 4] = texel_colors[4 * i:][:4]
                     
 
-    def calc_bpy_texture(self, name):
-        self.texture = bpy.data.textures.new(name, "IMAGE")
+    def calc_bpy_texture(self, name, material):
         if self.pal_bytestr:
             self.palette = [uint16_to_rgb555(c) + [31] for c in 
                     to_uint_list(self.pal_bytestr, 0, 2, len(self.pal_bytestr) // 2)]
@@ -694,16 +705,16 @@ class Texture:
             raise Exception("Unknown type: " + hex(self.type) + 
                     " in texture: " + name)
 
-        image = bpy.data.images.new(name, self.width, self.height, alpha=True, float_buffer=True)
+        image = bpy.data.images.new(name, self.width, self.height, alpha=True)
         image.colorspace_settings.name = "sRGB"
-        image.pixels = [((v / 31) ** 2.2 if i % 4 != 3 else v / 31)
-                for c in self.rgba5555 for i, v in enumerate(c)]
-        self.texture.image = image
+        image.pixels = [v / 31 for c in self.rgba5555 for i, v in enumerate(c)]
+        self.image = image
 
         if self.type in (Texture.COLOR_16, Texture.COLOR_256, Texture.COLOR_DIRECT):
-            self.texture["Uncompressed"] = 1
+            self.material["Uncompressed"] = 1
 
-    def from_bytestr(tex_bytestr, pal_bytestr, name, width, height, type_, transparency):
+    def from_bytestr(tex_bytestr, pal_bytestr, name, width, height, type_, transparency,
+            material):
         tex = Texture()
         tex.tex_bytestr = tex_bytestr
         tex.pal_bytestr = pal_bytestr
@@ -711,7 +722,7 @@ class Texture:
         tex.height = height
         tex.type = type_
         tex.transparency = transparency
-        tex.calc_bpy_texture(name)
+        tex.calc_bpy_texture(name, material)
         return tex
 
 

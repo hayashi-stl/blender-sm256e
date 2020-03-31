@@ -1,6 +1,7 @@
 import bpy
 import math
-from pathlib import PurePath
+import os
+from pathlib import Path, PurePath
 from mathutils import Euler, Matrix
 from .util import *
 
@@ -212,7 +213,9 @@ def import_display_lists(bytestr, skeleton, displist_material_map):
 
     return Geometry(vertices, faces, False)
 
-def import_texture(bytestr, texture_id, palette_id, material, tex_cache):
+def import_texture(bytestr, texture_id, palette_id, material, img_cache):
+    """ Returns an image """
+    
     if texture_id < 0:
         return
 
@@ -223,9 +226,8 @@ def import_texture(bytestr, texture_id, palette_id, material, tex_cache):
     name = cstr_to_str(bytestr, to_uint(tex_bytes, 0, 4))
     pal_name = cstr_to_str(bytestr, to_uint(pal_bytes, 0, 4)) if palette_id >= 0 else None
 
-    tex = None
-    if (name, pal_name) in tex_cache:
-        tex = tex_cache[(name, pal_name)]
+    if (name, pal_name) in img_cache:
+        return img_cache[(name, pal_name)]
 
     else:
         size = to_uint(tex_bytes, 0x8, 4)
@@ -242,86 +244,123 @@ def import_texture(bytestr, texture_id, palette_id, material, tex_cache):
         pal_data = get_n_bytes(bytestr, to_uint(pal_bytes, 4, 4), to_uint(pal_bytes, 8, 4)) \
                 if palette_id >= 0 else None
 
-        tex = Texture.from_bytestr(tex_data, pal_data, name, width, height, type_, transparency)
-        tex_cache[(name, pal_name)] = tex
-
-    return tex.texture
-    #TODO: Shaders
-    slot = material.texture_slots.add()
-    slot.texture = tex.texture
-    return tex.texture
+        tex = Texture.from_bytestr(tex_data, pal_data, name, width, height, type_, transparency,
+                material)
+        img_cache[(name, pal_name)] = tex.image
+        return tex.image
 
 
-def import_material(bytestr, material_bytes, material_id, mesh, geo, tex_cache):
+def load_shaders():
+    wd = os.path.dirname(os.path.realpath(__file__))
+    if "Decal" not in bpy.data.node_groups:
+        for shader in ["Decal", "Light Shading", "Modulation", "Texture Parameters",
+                "Vertex Shading"]:
+            bpy.ops.wm.link(directory=wd + "/shaders.blend/NodeTree/", filename=shader)
+
+
+def add_node(material, name, ntype):
+    node = material.node_tree.nodes.new(ntype)
+    node.name = name
+    return node
+
+
+def add_node_group(material, name, gtype):
+    group = material.node_tree.nodes.new("ShaderNodeGroup")
+    group.node_tree = bpy.data.node_groups[gtype]
+    group.name = name
+    return group
+
+
+def import_material(bytestr, material_bytes, material_id, mesh, geo, img_cache):
     material = bpy.data.materials.new(cstr_to_str(bytestr, to_uint(material_bytes, 0, 4)))
+    material.use_nodes = True
+    material.node_tree.nodes.remove(material.node_tree.nodes["Principled BSDF"])
+    shader_output = material.node_tree.nodes["Material Output"]
+
+    links = material.node_tree.links
+
     mesh.materials.append(material)
-    tex = import_texture(bytestr, to_int(material_bytes, 4, 4), to_int(material_bytes, 8, 4),
-            material, tex_cache)
+    img = import_texture(bytestr, to_int(material_bytes, 4, 4), to_int(material_bytes, 8, 4),
+            material, img_cache)
 
-    transparency = any(i % 4 == 3 and v < 1 for i, v in enumerate(tex.image.pixels)) \
-            if tex else False
-
-    # Texture parameters
-    if tex:
-        tex_param = to_uint(material_bytes, 0x20, 4)
-        if (tex_param >> 16 & 3) == 0:
-            tex.extension = "EXTEND"
-        if tex_param >> 18 & 1:
-            tex.use_mirror_x = True
-        if tex_param >> 19 & 1:
-            tex.use_mirror_y = True
-
-        if (tex_param >> 30 & 3) == 2:
-            material["Environment Map"] = 1
+    transparency = any(i % 4 == 3 and v < 1 for i, v in enumerate(img.pixels)) \
+            if img else False
+    translucency = any(i % 4 == 3 and 0 < v < 1 for i, v in enumerate(img.pixels)) \
+            if img else False
 
     # Polygon parameters
     poly_param = to_uint(material_bytes, 0x24, 4)
     blend_type = poly_param >> 4 & 3
-    if False: #TODO: tex:
-        material.texture_slots[0].blend_type = "MIX" if blend_type == 1 else "MULTIPLY"
     material.use_backface_culling = not (poly_param >> 6 & 1)
     if poly_param >> 14 & 1:
         material["Depth Equal"] = 1
-
-    alpha = poly_param >> 16 & 0x1f
-    if (transparency and blend_type != 1) or alpha != 31:
-        if False: #TODO: tex:
-            material.texture_slots[0].use_map_alpha = True
-        #material.use_transparency = True
-        #material.alpha = alpha / 31
-
+    alpha = (poly_param >> 16 & 0x1f) / 31
     material["Polygon ID"] = poly_param >> 24 & 0x3f
 
+    if (translucency and blend_type != 1) or alpha < 1:
+        material.blend_method = "BLEND"
+    elif transparency and blend_type != 1:
+        material.blend_method = "CLIP"
+
     # Lighting colors
+    use_vertex_colors = all(v.color is not None
+            for f in geo.faces for v in f.vertices if f.material_id == material_id)
+
     diff_amb = to_uint(material_bytes, 0x28, 4)
     diffuse = uint16_to_color(diff_amb, 2.2)
-    ambient = sum(uint16_to_color(diff_amb >> 16, 1)) / sum(diffuse) \
-            if sum(diffuse) > 0 else 0.5
-    material.diffuse_color = tuple(diffuse) + (1,)
-    return
-
-    # TODO: Use shaders
-    material.diffuse_intensity = 1
-    material.ambient = ambient
-    material.use_vertex_color_paint = all(v.normal is None
-            for f in geo.faces for v in f.vertices if f.material_id == material_id)
-    material.use_shadeless = material.use_vertex_color_paint
     
     spec_emit = to_uint(material_bytes, 0x2c, 4)
     specular = uint16_to_color(spec_emit, 2.2)
-    emission = sum(uint16_to_color(spec_emit >> 16, 1)) / 3
-    material.specular_color = specular
-    material.specular_intensity = 1
-    material.emit = emission
+    emission = uint16_to_color(spec_emit >> 16, 2.2)
+
+    # Shaders
+    shader_shading = None
+    if use_vertex_colors == 1:
+        shader_shading = add_node(material, "Vertex Color", "ShaderNodeVertexColor")
+    else:
+        shader_shading = add_node_group(material, "Shading", "Light Shading")
+        shader_shading.inputs["Diffuse"].default_value = tuple(diffuse) + (1,)
+        shader_shading.inputs["Specular"].default_value = tuple(specular) + (1,)
+        shader_shading.inputs["Emission"].default_value = tuple(emission) + (1,)
+
+    # Modulation vs Decal
+    shader_mix = add_node_group(material, "Color Mix",
+            "Decal" if blend_type == 1 else "Modulation")
+    
+    links.new(shader_mix.inputs["Color"], shader_shading.outputs["Color"])
+    links.new(shader_output.inputs["Surface"], shader_mix.outputs["Shader"])
+    shader_mix.inputs["Alpha"].default_value = alpha
+
+    # Texture parameters
+    if img:
+        tex_param = to_uint(material_bytes, 0x20, 4)
+
+        shader_uv = add_node(material, "UV", "ShaderNodeUVMap")
+        shader_tex_param = add_node_group(material, "Texture Parameters", "Texture Parameters")
+        shader_tex = add_node(material, "Texture", "ShaderNodeTexImage")
+
+        shader_tex_param.inputs["Repeat X"].default_value = tex_param >> 16 & 1
+        shader_tex_param.inputs["Repeat Y"].default_value = tex_param >> 17 & 1
+        shader_tex_param.inputs["Flip X"].default_value = tex_param >> 18 & 1
+        shader_tex_param.inputs["Flip Y"].default_value = tex_param >> 19 & 1
+
+        shader_tex.image = img
+        shader_tex.interpolation = "Closest"
+        shader_tex.extension = "EXTEND"
+
+        links.new(shader_tex_param.inputs["UV"], shader_uv.outputs["UV"])
+        links.new(shader_tex.inputs["Vector"], shader_tex_param.outputs["UV"])
+        links.new(shader_mix.inputs["Tex Color"], shader_tex.outputs["Color"])
+        links.new(shader_mix.inputs["Tex Alpha"], shader_tex.outputs["Alpha"])
 
 
-def import_materials(bytestr, mesh, geo, material_ids, tex_cache):
+def import_materials(bytestr, mesh, geo, material_ids, img_cache):
     material_offset = to_uint(bytestr, 0x28, 4)
 
     for i in range(to_uint(bytestr, 0x24, 4)):
         if i in material_ids:
             import_material(bytestr, get_n_bytes(bytestr, material_offset + i * 0x30, 0x30),
-                    i, mesh, geo, tex_cache)
+                    i, mesh, geo, img_cache)
 
     counter = 0
     material_table = {m: i for i, m in enumerate(sorted(material_ids))}
@@ -330,8 +369,9 @@ def import_materials(bytestr, mesh, geo, material_ids, tex_cache):
 
         # UV downscaling
         material = mesh.materials[material_table[face.material_id]]
-        if False: #TODO material.texture_slots[0]:
-            size = material.texture_slots[0].texture.image.size
+
+        if "Texture" in material.node_tree.nodes:
+            size = material.node_tree.nodes["Texture"].image.size
             for i in range(counter, counter + len(face.vertices)):
                 for j in range(2):
                     mesh.uv_layers[0].data[i].uv[j] /= size[j]
@@ -340,6 +380,8 @@ def import_materials(bytestr, mesh, geo, material_ids, tex_cache):
 
 
 def load_ret(context, filepath):
+    load_shaders()
+
     bytestr = None
     with open(filepath, "rb") as f:
         bytestr = f.read()
@@ -348,13 +390,13 @@ def load_ret(context, filepath):
     skeleton, displist_material_map = import_bones(bytestr)
 
     bone = skeleton.bones[0]
-    tex_cache = {} # maps (tex_name, pal_name) to texture
+    img_cache = {} # maps (tex_name, pal_name) to texture
     objs = []
     while bone:
         geo = import_display_lists(bytestr, skeleton, 
                 {d: m for d, m in displist_material_map.items() if d in bone.displist_ids})
         obj = geo.create_mesh(context, PurePath(filepath).stem, skeleton, scale)
-        import_materials(bytestr, obj.data, geo, bone.material_ids, tex_cache)
+        import_materials(bytestr, obj.data, geo, bone.material_ids, img_cache)
         bone = bone.sibling
         objs.append(obj)
 
