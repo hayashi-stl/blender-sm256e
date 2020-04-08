@@ -4,6 +4,7 @@ import os
 from pathlib import Path, PurePath
 from mathutils import Euler, Matrix
 from .util import *
+from .lz77 import LZ77
 
 def import_bone(bytestr, bone_bytes):
     """ Returns (bone, displist_material_map) """
@@ -32,7 +33,7 @@ def import_bone(bytestr, bone_bytes):
     displist_ids = to_uint_list(bytestr, to_uint(bone_bytes, 0x38, 4), 1, num_pairs)
 
     bone = Bone(name, parent_id, sibling_id, transform, set(mat_ids), set(displist_ids))
-    return bone, {m: d for m, d in zip(mat_ids, displist_ids)}
+    return bone, {d: m for m, d in zip(mat_ids, displist_ids)}
     
 
 def import_bones(bytestr):
@@ -288,6 +289,10 @@ def import_material(bytestr, material_bytes, material_id, mesh, geo, img_cache):
     translucency = any(i % 4 == 3 and 0 < v < 1 for i, v in enumerate(img.pixels)) \
             if img else False
 
+    # Transform hack TODO: Put this in the shader
+    material["Texture Scale"] = [to_fix(material_bytes, 0x0c, 4, 12),
+                                 to_fix(material_bytes, 0x10, 4, 12)]
+
     # Polygon parameters
     poly_param = to_uint(material_bytes, 0x24, 4)
     blend_type = poly_param >> 4 & 3
@@ -370,21 +375,26 @@ def import_materials(bytestr, mesh, geo, material_ids, img_cache):
         # UV downscaling
         material = mesh.materials[material_table[face.material_id]]
 
-        if "Texture" in material.node_tree.nodes:
+        # Also check uv layers because environment mapping exists,
+        # in which case the uv coordinates might not have been recorded.
+        if "Texture" in material.node_tree.nodes and mesh.uv_layers:
             size = material.node_tree.nodes["Texture"].image.size
             for i in range(counter, counter + len(face.vertices)):
                 for j in range(2):
-                    mesh.uv_layers[0].data[i].uv[j] /= size[j]
+                    mesh.uv_layers[0].data[i].uv[j] *= material["Texture Scale"][j] / size[j]
 
         counter += len(face.vertices)
 
 
-def load_ret(context, filepath):
+def load_ret(context, filepath, *, create_obj=True, one_mesh=False):
     load_shaders()
 
     bytestr = None
     with open(filepath, "rb") as f:
         bytestr = f.read()
+
+    if bytestr.startswith(b"LZ77"):
+        bytestr = LZ77.decompress(bytestr[4:])
 
     scale = 2 ** to_uint(bytestr, 0, 4)
     skeleton, displist_material_map = import_bones(bytestr)
@@ -392,15 +402,19 @@ def load_ret(context, filepath):
     bone = skeleton.bones[0]
     img_cache = {} # maps (tex_name, pal_name) to texture
     objs = []
+    meshes = []
     while bone:
         geo = import_display_lists(bytestr, skeleton, 
                 {d: m for d, m in displist_material_map.items() if d in bone.displist_ids})
-        obj = geo.create_mesh(context, PurePath(filepath).stem, skeleton, scale)
-        import_materials(bytestr, obj.data, geo, bone.material_ids, img_cache)
-        bone = bone.sibling
+        obj, mesh = geo.create_mesh(context, PurePath(filepath).stem, skeleton, scale,
+                create_obj=create_obj)
+        import_materials(bytestr, mesh, geo, bone.material_ids, img_cache)
+        bone = None if one_mesh else bone.sibling
         objs.append(obj)
+        meshes.append(mesh)
 
-    return objs
+    return (objs[0] if create_obj else meshes[0]) if one_mesh else \
+            (objs if create_obj else meshes)
 
 def load(context, filepath):
     load_ret(context, filepath)

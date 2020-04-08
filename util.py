@@ -250,7 +250,7 @@ class Geometry:
 
         return (tri_strips, quad_strips, tris, quads)
 
-    def create_mesh(self, context, name, skeleton, scale):
+    def create_mesh(self, context, name, skeleton, scale, *, create_obj=True):
         get_equiv = lambda v: (v.position, v.normal, v.group)
 
         equiv = {}
@@ -258,11 +258,13 @@ class Geometry:
             equiv.setdefault(get_equiv(v), []).append(v)
 
         mesh = bpy.data.meshes.new(name)
-        obj = bpy.data.objects.new(name, mesh)
-        
-        context.scene.collection.objects.link(obj)
-        context.view_layer.objects.active = obj
-        obj.select_set(True)
+        obj = None
+        if create_obj:
+            obj = bpy.data.objects.new(name, mesh)
+            
+            context.scene.collection.objects.link(obj)
+            context.view_layer.objects.active = obj
+            obj.select_set(True)
 
         equiv_vertices = [v for v in self.vertices if equiv[get_equiv(v)][0] == v]
         vertices = [skeleton.bones[v.group].abs_transform @ (scale * v.position) 
@@ -293,7 +295,7 @@ class Geometry:
             for i, data in enumerate(mesh.vertex_colors[0].data):
                 data.color = tuple(colors[i]) + (1,)
 
-        return obj
+        return obj, mesh
 
 
 class Bone:
@@ -315,7 +317,7 @@ class Bone:
 
     def attach_to(self, skeleton):
         self.parent = skeleton.bones[self.parent_id] if self.parent_id >= 0 else None
-        self.abs_transform = self.parent.abs_transform * self.rel_transform \
+        self.abs_transform = self.parent.abs_transform @ self.rel_transform \
                 if self.parent else self.rel_transform
 
     def update_parent_lists(self, skeleton):
@@ -711,7 +713,7 @@ class Texture:
         self.image = image
 
         if self.type in (Texture.COLOR_16, Texture.COLOR_256, Texture.COLOR_DIRECT):
-            self.material["Uncompressed"] = 1
+            material["Uncompressed"] = 1
 
     def from_bytestr(tex_bytestr, pal_bytestr, name, width, height, type_, transparency,
             material):

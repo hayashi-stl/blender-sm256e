@@ -1,5 +1,6 @@
 import bpy
 import os
+import re
 from bpy.props import StringProperty, BoolProperty, FloatProperty, EnumProperty
 
 from bpy_extras.io_utils import ExportHelper, ImportHelper
@@ -126,8 +127,31 @@ def register():
 
     from .spoiler import main
     for c in main.bpy_classes:
+        # Ensure that recursion works
+        props = c.__annotations__ if hasattr(c, "__annotations__") else None
+        if props is not None:
+            delattr(c, "__annotations__")
         bpy.utils.register_class(c)
+        if props is not None:
+            c.__annotations__ = props
+
+    # Now that all the classes have bl_rna attributes,
+    # we can load in the properties
+    for c in main.bpy_classes:
+        bpy.utils.unregister_class(c)
+        bpy.utils.register_class(c)
+
     bpy.types.Scene.level = bpy.props.PointerProperty(type=main.LevelSettings)
+
+    for c in main.bpy_classes:
+        match = re.match(r"ObjectStruct<(?P<arg>\w+)>", c.full_name) \
+                if hasattr(c, "full_name") else None
+        if match:
+            setattr(bpy.types.Object, main.name_to_attr(match["arg"]),
+                    bpy.props.PointerProperty(type=c))
+
+    bpy.types.SpaceView3D.draw_handler_add(main.update_object_struct_arrays, (),
+            "WINDOW", "POST_VIEW")
 
 
 def unregister():
@@ -139,9 +163,18 @@ def unregister():
     bpy.types.TOPBAR_MT_file_export.remove(export_json_menu_func)
 
     from .spoiler import main
+    bpy.types.SpaceView3D.draw_handler_remove(main.update_object_struct_arrays, (),
+            "WINDOW")
+
     for c in main.bpy_classes:
         bpy.utils.unregister_class(c)
     del bpy.types.Scene.level
+
+    for c in main.bpy_classes:
+        match = re.match(r"ObjectStruct<(?P<arg>\w+)>", c.full_name) \
+                if hasattr(c, "full_name") else None
+        if match:
+            delattr(bpy.types.Object, main.name_to_attr(match["arg"]))
 
 if __name__ == "__main__":
     register()
