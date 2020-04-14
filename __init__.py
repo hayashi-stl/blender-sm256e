@@ -56,6 +56,27 @@ class ExportBMD(bpy.types.Operator, ExportHelper):
         return export_bmd.save(context, self.filepath)
 
 
+class ExportKCL(bpy.types.Operator, ExportHelper):
+    """Selection to KCL"""
+    bl_idname = "export_scene.kcl"
+    bl_label = "Export KCL"
+    bl_options = {"PRESET"}
+
+    filename_ext = ".kcl"
+    filter_glob = StringProperty(default="*.kcl", options={"HIDDEN"})
+
+    @property
+    def check_extension(self):
+        return True
+
+    def execute(self, context):
+        if not self.filepath:
+            raise Exception("filepath not set")
+
+        from . import export_kcl
+        return export_kcl.save(context, self.filepath)
+
+
 def export_menu_func(self, context):
     self.layout.operator(ExportBMD.bl_idname, text="NDS Binary Model Format (.bmd)")
 
@@ -64,11 +85,16 @@ def import_menu_func(self, context):
     self.layout.operator(ImportBMD.bl_idname, text="NDS Binary Model Format (.bmd)")
 
 
+def export_kcl_menu_func(self, context):
+    self.layout.operator(ExportKCL.bl_idname, text="NDS K. Collision Format (.kcl)")
+
+
 def register():
     bpy.utils.register_module(__name__)
 
     bpy.types.INFO_MT_file_import.append(import_menu_func)
     bpy.types.INFO_MT_file_export.append(export_menu_func)
+    bpy.types.INFO_MT_file_export.append(export_kcl_menu_func)
 
 
 def unregister():
@@ -76,6 +102,7 @@ def unregister():
 
     bpy.types.INFO_MT_file_import.remove(import_menu_func)
     bpy.types.INFO_MT_file_export.remove(export_menu_func)
+    bpy.types.INFO_MT_file_export.remove(export_kcl_menu_func)
 
 if __name__ == "__main__":
     register()

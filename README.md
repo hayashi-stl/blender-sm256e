@@ -23,3 +23,5 @@ Download the zip file [here](https://github.com/josh65536/blender-sm256e/archive
 * To make a material use equality as its depth test, add a custom property called "Depth Equal" to the material and set it to 1.
 * To make a material use its texture as an environment map, add a custom property called "Environment Map" to the material and set it to 1.
 * To avoid compressing a texture that would be compressed, add a custom property called "Uncompressed" to the texture and set it to 1.
+* To make a texture use mirroring, set the appropriate Mirror flags under the image mapping settings.
+* To make a material transparent, make sure it uses modulation shading (if it has a texture) and enable transparency. This also applies if you want to make a material use a texture that has transparency.
