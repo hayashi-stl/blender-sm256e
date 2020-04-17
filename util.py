@@ -63,6 +63,9 @@ def from_uint(integer, num_bytes):
 def fix_to_int(number, bit_precision):
     return int_round_mid_up(number * (1 << bit_precision))
 
+def deg_to_int(number):
+    return int_round_mid_up(number * 65536 / 360)
+
 def from_fix(number, num_bytes, bit_precision):
     return from_int(fix_to_int(number, bit_precision), num_bytes)
 

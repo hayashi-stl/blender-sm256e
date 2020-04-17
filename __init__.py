@@ -56,6 +56,27 @@ class ExportBMD(bpy.types.Operator, ExportHelper):
         return export_bmd.save(context, self.filepath)
 
 
+class ExportBCA(bpy.types.Operator, ExportHelper):
+    """Selection to BCA"""
+    bl_idname = "export_scene.bca"
+    bl_label = "Export BCA"
+    bl_options = {"PRESET"}
+
+    filename_ext = ".bca"
+    filter_glob = StringProperty(default="*.bca", options={"HIDDEN"})
+
+    @property
+    def check_extension(self):
+        return True
+
+    def execute(self, context):
+        if not self.filepath:
+            raise Exception("filepath not set")
+
+        from . import export_bca
+        return export_bca.save(context, self.filepath)
+
+
 class ImportKCL(bpy.types.Operator, ImportHelper):
     bl_idname = "import_scene.kcl"
     bl_label = "Import KCL (Debug only!)"
@@ -120,6 +141,10 @@ def import_menu_func(self, context):
     self.layout.operator(ImportBMD.bl_idname, text="NDS Binary Model Format (.bmd)")
 
 
+def export_bca_menu_func(self, context):
+    self.layout.operator(ExportBCA.bl_idname, text="NDS Binary Character Animation (.bca)")
+
+
 def export_kcl_menu_func(self, context):
     self.layout.operator(ExportKCL.bl_idname, text="NDS K. Collision Format (.kcl)")
 
@@ -133,6 +158,7 @@ def register():
 
     bpy.types.INFO_MT_file_import.append(import_menu_func)
     bpy.types.INFO_MT_file_export.append(export_menu_func)
+    bpy.types.INFO_MT_file_export.append(export_bca_menu_func)
     bpy.types.INFO_MT_file_import.append(import_kcl_menu_func)
     bpy.types.INFO_MT_file_export.append(export_kcl_menu_func)
 
@@ -142,6 +168,7 @@ def unregister():
 
     bpy.types.INFO_MT_file_import.remove(import_menu_func)
     bpy.types.INFO_MT_file_export.remove(export_menu_func)
+    bpy.types.INFO_MT_file_export.remove(export_bca_menu_func)
     bpy.types.INFO_MT_file_import.remove(import_kcl_menu_func)
     bpy.types.INFO_MT_file_export.remove(export_kcl_menu_func)
 
