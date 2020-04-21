@@ -378,7 +378,7 @@ def get_group_names(mesh):
     return [g.name for g in [obj.vertex_groups for obj in bpy.data.objects \
             if obj.data == mesh][0]]
 
-def save(context, filepath):
+def save(context, filepath, *, sm256=False):
     meshes = sorted((obj.data for obj in context.selected_objects if obj.type == "MESH"),
             key=lambda mesh: mesh.name)
     rigs = [obj.data for obj in context.selected_objects if obj.type == "ARMATURE"]
@@ -390,11 +390,11 @@ def save(context, filepath):
 
     bytestr_list = BytesWithPtrs()
 
-    max_coord = max(max(max(abs(c) for c in \
-                (bones[get_group_names(m)[v.groups[0].group]].matrix_local.inverted() * v.co \
-                    if bones and len(v.groups) > 0 else v.co)) \
-            for v in m.vertices) \
-            for m in meshes)
+    all_verts = [(bones[get_group_names(m)[v.groups[0].group]].matrix_local.inverted() * v.co \
+                    if bones and len(v.groups) > 0 else v.co) \
+                    for m in meshes for v in m.vertices]
+
+    max_coord = max(abs(c) for v in all_verts for c in v)
     scale_factor = max(int(math.log2(max_coord)) - 2, 0)
     # Values really close to 8 can still round to 8, so account for that
     max_coord = int_round_mid_up(max_coord / 2 ** scale_factor)
@@ -403,6 +403,11 @@ def save(context, filepath):
 
     if scale_factor > 13: # What's the actual limit?
         raise Exception("Your model is way too big.")
+
+    min_y = min(v.y for v in all_verts)
+    max_y = max(v.y for v in all_verts)
+    range_offset_y = (min_y + max_y) / 2
+    range_ = max((v - Vector((0, range_offset_y, 0))).length for v in all_verts)
 
     bone_data = [export_bone(b, bones, m.materials, m, meshes, get_group_names(m)) \
             for m in meshes for b in (bones if bones else [None])]
@@ -450,8 +455,14 @@ def save(context, filepath):
     tb_bytestr = AlignedBytes(from_uint_list(range(len(bone_data)), 2), 2)
     tb_ptr = BytesPtr(header_aligned, 0x2c, tb_bytestr, 0, 4)
 
+    # Range offset Y and range
+    if sm256:
+        header += from_fix(range_offset_y, 4, 12)
+        header += from_fix(range_, 4, 12)
+    else:
+        header += from_uint(0, 4) * 2 # unknown stuff
+
     # Texture and palette data block
-    header += from_uint(0, 4) * 2 # unknown stuff
     header += from_uint(0, 4) # pointer
     tex_data_marker = AlignedBytes(b'', 4)
     tex_data_ptr = BytesPtr(header_aligned, 0x38, tex_data_marker, 0, 4)

@@ -44,6 +44,10 @@ class ExportBMD(bpy.types.Operator, ExportHelper):
     filename_ext = ".bmd"
     filter_glob = StringProperty(default="*.bmd", options={"HIDDEN"})
 
+    sm256 = BoolProperty(name="SM256-specific BMD",
+            description="Export a SM256-specific BMD, which includes range and range offset Y",
+            default="SM256_ROOT" in os.environ)
+
     @property
     def check_extension(self):
         return True
@@ -52,8 +56,16 @@ class ExportBMD(bpy.types.Operator, ExportHelper):
         if not self.filepath:
             raise Exception("filepath not set")
 
+        keywords = self.as_keywords(ignore=("axis_forward",
+                                            "axis_up",
+                                            "global_scale",
+                                            "check_existing",
+                                            "filter_glob",
+                                            "xna_validate",
+                                            ))
+
         from . import export_bmd
-        return export_bmd.save(context, self.filepath)
+        return export_bmd.save(context, **keywords)
 
 
 class ExportBCA(bpy.types.Operator, ExportHelper):
