@@ -345,7 +345,7 @@ def export_material(material, ref_textures):
     render_1_dot = False
     depth_equal = bool(material.get("Depth Equal"))
     fog = True
-    alpha = int_round_mid_up(material.alpha * 31)
+    alpha = int_round_mid_up(material.alpha * 31) if material.use_transparency else 31
     poly_id = material.get("Polygon ID", 0)
     poly_param = lights << 0 | \
             poly_mode << 4 | \
@@ -401,7 +401,7 @@ def save(context, filepath, *, sm256=False):
     if max_coord >= 8:
         scale_factor += 1
 
-    if scale_factor > 13: # What's the actual limit?
+    if scale_factor > 19: # What's the actual limit?
         raise Exception("Your model is way too big.")
 
     min_y = min(v.y for v in all_verts)

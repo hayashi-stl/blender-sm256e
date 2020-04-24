@@ -473,7 +473,8 @@ class Texel4x4:
                 palette.append(None)
 
         num_nones = len(list(takewhile(lambda c: c is None, reversed(palette))))
-        palette = [(0, 0, 0, 31) if c is None else c for c in palette[:-num_nones]]
+        palette = [(0, 0, 0, 31) if c is None else c for c in 
+                (palette[:-num_nones] if num_nones != 0 else palette)]
         return palette
 
 class Texture:
@@ -613,10 +614,18 @@ class Texture:
         else:
             self.calc_bytestr_compressed()
 
+        # Only 4-color textures should have less than 5 colors.
+        # Palettes with less than 5 colors get allocated with 8-byte alignment,
+        # which is appropriate only for 4-color textures.
+        # Other texture types require 16-byte alignment
+        if self.type != Texture.COLOR_4 and len(self.pal_bytestr) < 10:
+            self.pal_bytestr = self.pal_bytestr + b'\0' * (10 - len(self.pal_bytestr))
+
     def from_bpy_texture(texture):
         """
         texture: bpy.types.Texture
         """
+        print(texture.image.name)
         tex = Texture()
         tex.texture = texture
         if any(s != 2 ** (s.bit_length() - 1) or s < 8 or s > 1024 for s in texture.image.size):
@@ -625,6 +634,7 @@ class Texture:
         tex.width = texture.image.size[0]
         tex.height = texture.image.size[1]
         tex.calc_bytestr()
+        print(texture.image.name, "DONE")
         return tex
 
     def get_colors(indexes, palette):
