@@ -271,6 +271,10 @@ class Geometry:
                 for v in equiv_vertices]
         faces = [[equiv_vertices.index(equiv[get_equiv(v)][0]) for v in f.vertices]
                 for f in self.faces]
+
+        # Billboard hack
+        for v in self.vertices:
+            v.billboard = skeleton.bones[v.group].billboard
         
         mesh.from_pydata(vertices, [], faces)
 
@@ -299,7 +303,8 @@ class Geometry:
 
 
 class Bone:
-    def __init__(self, name, parent_id, sibling_id, rel_transform, material_ids, displist_ids):
+    def __init__(self, name, parent_id, sibling_id, rel_transform, material_ids, displist_ids,
+            billboard):
         """
         name: string
         parent_id: int (-1 means no parent),
@@ -307,6 +312,7 @@ class Bone:
         rel_transform: Matrix (a 4x4 matrix),
         material_ids: {int}
         displist_ids: {int}
+        billboard: bool
         """
         self.name = name
         self.parent_id = parent_id
@@ -314,6 +320,7 @@ class Bone:
         self.rel_transform = rel_transform
         self.material_ids = material_ids
         self.displist_ids = displist_ids
+        self.billboard = billboard
 
     def attach_to(self, skeleton):
         self.parent = skeleton.bones[self.parent_id] if self.parent_id >= 0 else None
@@ -614,6 +621,7 @@ class Texture:
         """
         texture: bpy.types.Texture
         """
+        print(texture.image.name)
         tex = Texture()
         tex.texture = texture
         if any(s != 2 ** (s.bit_length() - 1) or s < 8 or s > 1024 for s in texture.image.size):

@@ -142,6 +142,7 @@ def register():
         bpy.utils.register_class(c)
 
     bpy.types.Scene.level = bpy.props.PointerProperty(type=main.LevelSettings)
+    bpy.types.Scene.star_room = bpy.props.PointerProperty(type=main.LevelStarRoom)
 
     for c in main.bpy_classes:
         match = re.match(r"ObjectStruct<(?P<arg>\w+)>", c.full_name) \
@@ -150,11 +151,16 @@ def register():
             setattr(bpy.types.Object, main.name_to_attr(match["arg"]),
                     bpy.props.PointerProperty(type=c))
 
-    bpy.types.SpaceView3D.draw_handler_add(main.update_object_struct_arrays, (),
+    bpy.types.SpaceView3D.draw_handler_add(main.on_draw, (),
             "WINDOW", "POST_VIEW")
+
+    from .spoiler import ops
+    ops.register_ops()
 
 
 def unregister():
+    from .spoiler import ops
+    ops.unregister_ops()
     bpy_class_unregister()
 
     bpy.types.TOPBAR_MT_file_import.remove(import_menu_func)
@@ -169,6 +175,7 @@ def unregister():
     for c in main.bpy_classes:
         bpy.utils.unregister_class(c)
     del bpy.types.Scene.level
+    del bpy.types.Scene.star_room
 
     for c in main.bpy_classes:
         match = re.match(r"ObjectStruct<(?P<arg>\w+)>", c.full_name) \

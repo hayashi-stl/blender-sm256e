@@ -32,7 +32,10 @@ def import_bone(bytestr, bone_bytes):
     mat_ids = to_uint_list(bytestr, to_uint(bone_bytes, 0x34, 4), 1, num_pairs)
     displist_ids = to_uint_list(bytestr, to_uint(bone_bytes, 0x38, 4), 1, num_pairs)
 
-    bone = Bone(name, parent_id, sibling_id, transform, set(mat_ids), set(displist_ids))
+    billboard = bool(to_uint(bone_bytes, 0x3c, 4) & 1)
+
+    bone = Bone(name, parent_id, sibling_id, transform, set(mat_ids), set(displist_ids),
+            billboard)
     return bone, {d: m for m, d in zip(mat_ids, displist_ids)}
     
 
@@ -296,7 +299,8 @@ def import_material(bytestr, material_bytes, material_id, mesh, geo, img_cache):
     # Polygon parameters
     poly_param = to_uint(material_bytes, 0x24, 4)
     blend_type = poly_param >> 4 & 3
-    material.use_backface_culling = not (poly_param >> 6 & 1)
+    material.use_backface_culling = not (poly_param >> 6 & 1) and \
+            not any(v.billboard for v in geo.vertices)
     if poly_param >> 14 & 1:
         material["Depth Equal"] = 1
     alpha = (poly_param >> 16 & 0x1f) / 31
