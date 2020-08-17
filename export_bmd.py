@@ -325,10 +325,11 @@ def export_material(material, ref_textures):
     tex_param = 0
     if material.texture_slots[0]:
         tex = material.texture_slots[0].texture
-        repeat = tex.extension != "EXTEND"
-        flip_x = repeat and tex.use_mirror_x
-        flip_y = repeat and tex.use_mirror_y
-        tex_param = repeat * 0b11 << 16 | flip_x << 18 | flip_y << 19
+        repeat_x = tex.extension != "EXTEND" and not bool(tex.get("Extend X"))
+        repeat_y = tex.extension != "EXTEND" and not bool(tex.get("Extend Y"))
+        flip_x = repeat_x and tex.use_mirror_x
+        flip_y = repeat_y and tex.use_mirror_y
+        tex_param = repeat_x << 16 | repeat_y << 17 | flip_x << 18 | flip_y << 19
 
     tex_transform = 2 if material.get("Environment Map") else 0
     tex_param |= tex_transform << 30
@@ -344,7 +345,7 @@ def export_material(material, ref_textures):
     render_far_intersecting = True
     render_1_dot = False
     depth_equal = bool(material.get("Depth Equal"))
-    fog = True
+    fog = bool(material.get("Fog", 1))
     alpha = int_round_mid_up(material.alpha * 31) if material.use_transparency else 31
     poly_id = material.get("Polygon ID", 0)
     poly_param = lights << 0 | \

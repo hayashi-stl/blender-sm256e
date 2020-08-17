@@ -31,7 +31,7 @@ def import_bone(bytestr, bone_bytes):
     displist_ids = to_uint_list(bytestr, to_uint(bone_bytes, 0x38, 4), 1, num_pairs)
 
     bone = Bone(name, parent_id, sibling_id, transform, set(mat_ids), set(displist_ids))
-    return bone, {m: d for m, d in zip(mat_ids, displist_ids)}
+    return bone, {d: m for m, d in zip(mat_ids, displist_ids)}
     
 
 def import_bones(bytestr):

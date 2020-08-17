@@ -498,7 +498,8 @@ class Texture:
         num_colors = len({c[0:3] for c in self.rgba5555 if c[3] != 0})
         # Translucency
         if any(c[3] not in (0, 31) for c in self.rgba5555):
-            self.type = Texture.A3I5 if num_colors > 8 else Texture.A5I3
+            self.type = Texture.A3I5 if (num_colors > 8 and not self.texture.get("A5I3")) \
+                    else Texture.A5I3
 
         else:
             if any(c[3] == 0 for c in self.rgba5555):
@@ -520,14 +521,27 @@ class Texture:
     def reduce_colors(colors, new_num):
         reduced = set(colors)
         new_colors = colors[:]
+        removed_colors = set()
 
-        while len(reduced) > new_num:
-            pair = sorted(((c0, c1) for c0 in reduced for c1 in reduced if c0 != c1),
+        by_dist = sorted(((c0, c1) for c0 in reduced for c1 in reduced if c0 != c1),
                     # Don't merge a transparent pixel with an opaque one regardless of distance
                     key=lambda cp: (len(cp[0]) == 4 and (cp[0][3] == 0) != (cp[1][3] == 0),
-                        sum((a - b) ** 2 for a, b in zip(*cp))))[0]
+                        sum((a - b) ** 2 for a, b in zip(*cp))))
+        index = 0
+
+        while len(reduced) > new_num:
+            pair = by_dist[index]
+            index += 1
+            if pair[0] in removed_colors or pair[1] in removed_colors:
+                continue
+            
             # Keep more common color
-            new_color = max(pair, key=lambda c: colors.count(c))
+            pair = sorted(pair, key=lambda c: colors.count(c))
+            new_color = pair[1]
+            removed_color = pair[0]
+
+            if removed_color != new_color:
+                removed_colors.add(removed_color)
 
             for i in range(2):
                 reduced.remove(pair[i])
