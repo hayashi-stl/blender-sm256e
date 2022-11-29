@@ -21,11 +21,11 @@ class AnimDesc:
 
         self.bytestr = from_vec(self.vals, bytes_per_elem, 0)
 
-    def add_to_bytearr(self, bytearr):
+    def add_to_bytearr(self, bytearr: bytearray):
         self.index = -2
         while not (self.index == -1 or 
                 (self.index >= 0 and self.index % self.bytes_per_elem == 0)):
-            self.index = bytearr.find(self.bytestr)
+            self.index = bytearr.find(self.bytestr, self.index + 1)
 
         if self.index == -1: # Not found
             self.index = len(bytearr)
@@ -48,7 +48,7 @@ class AnimBone:
         self.transs = [m.to_translation() for m in transforms]
 
         scales_xyz = [[fix_to_int(v[i], 12) for v in self.scales] for i in range(3)]
-        rots_xyz = [[deg_to_int(v[i]) for v in self.rots] for i in range(3)]
+        rots_xyz = [[deg_to_int(v[i] / 16) for v in self.rots] for i in range(3)]
         transs_xyz = [[fix_to_int(v[i], 12) for v in self.transs] for i in range(3)]
 
         self.descs = [AnimDesc(vs, bpe) for vs, bpe in 
@@ -64,11 +64,14 @@ class AnimBone:
     
 
 def export_anim(context, obj):
+    # Bones and pose bones may not have the same order.
+
     mtxs = []
     fraam = context.scene.frame_current
     for frame in range(context.scene.frame_start, context.scene.frame_end + 1):
         context.scene.frame_set(frame)
-        mtxs.append([b.matrix.copy() for b in obj.pose.bones])
+        mtxs.append([b.matrix.copy() if b.parent is None else \
+            b.parent.matrix.inverted() * b.matrix for bone in obj.data.bones for b in [obj.pose.bones[bone.name]]])
     context.scene.frame_set(fraam)
 
     num_frames = len(mtxs)

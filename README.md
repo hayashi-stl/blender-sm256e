@@ -1,6 +1,6 @@
 # blender-sm256e
 
-Allows exporting of BMDs from Blender v2.79 (though it probably works with v2.78 as well, haven't checked).
+Allows exporting of BMDs and BCAs from Blender v2.79 (though it probably works with v2.78 as well, haven't checked).
 
 ## Installation
 
